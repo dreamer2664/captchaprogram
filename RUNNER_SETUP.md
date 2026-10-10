@@ -93,7 +93,9 @@
 | oct10 night | v8 wide fc384, 40 ep; geometric post-passes OFF for multitask | 93 | 63 | 69 | - |
 | oct10 night | + uniform card sizes, gaps 1-5, no-ink speckle, loose valley | 93 | 63 | 69 | - |
 | oct11 | v9 hard-mix 50 ep + STYLE ROUTING (see below) | 93 | 76 | 82 | 67 |
-| training | v10 hard specialist (hard:real 4:1, erosion aug), 60 ep | ? | ? | ? | ? |
+| oct11 | v10 hard specialist (hard:real 4:1, erosion aug), 60 ep | 93 | 78 | 83 | - |
+| oct11 | + wide TTA (9 jitters) on designed cards | 93 | 80 | 84 | - |
+| training | v11 = v10 recipe + big crop-jitter aug, 60 ep | ? | ? | ? | ? |
 
 v8 held-out per-char: easy 99.3 / hard 89.4 / real 88.2.
 v9 held-out per-char: easy 99.6 / hard 98.5 / real 97.5.

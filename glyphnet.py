@@ -380,7 +380,10 @@ def train_v5(epochs: int = 12, samples: int = 24000, batch: int = 64,
     crit_id = nn.CrossEntropyLoss()
     crit_case = nn.CrossEntropyLoss()
     best = 0.0
-    for ep in range(epochs):
+    restarts = 0
+    ep = -1
+    while ep < epochs - 1:
+        ep += 1
         perm = torch.randperm(n)
         model.train()
         tot = 0.0
@@ -407,6 +410,17 @@ def train_v5(epochs: int = 12, samples: int = 24000, batch: int = 64,
         acc = correct / n
         print(f"epoch {ep+1}/{epochs} loss {tot/n:.4f} char-acc {acc:.2%} "
               f"({time.time()-t0:.0f}s)", flush=True)
+        # DEAD-INIT TRIPWIRE: a fresh trunk sometimes lands in a flat-loss
+        # basin (~uniform predictions).  One bad epoch 1 is not proof, but a
+        # sub-10% epoch 1 is: re-roll the weights and redo it (max 4 rolls).
+        if ep == 0 and acc < 0.10 and restarts < 3:
+            restarts += 1
+            print(f"  dead init ({acc:.2%}) — re-rolling weights, "
+                  f"attempt {restarts+1}", flush=True)
+            model = GlyphNet(multitask=True)
+            opt = torch.optim.Adam(model.parameters(), 2e-3)
+            ep = -1
+            continue
         if acc > best:
             best = acc
             if acc > floor:

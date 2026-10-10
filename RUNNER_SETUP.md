@@ -80,3 +80,21 @@
 - Dual mode IS implemented: both captchas are found, read, and
   joined with a SPACE between them ("abc123 xyz789").
 - After a page restyle: re-calibrate, and send a screenshot for retraining.
+
+## Accuracy log (sandbox suites, local reader only — no Gemini keys here)
+
+| date | change | easy exact | hard exact | real exact | e2e exact |
+|---|---|---|---|---|---|
+| oct10 am | v4 weights, broken generator | 7 | 0 | 0 | - |
+| oct10 pm | RGBA-alpha fix + anchor fix + dom-ink seg | 30 | 13 | 13 | 3 |
+| oct10 pm | + dom sign-after-ring fix (REAL pages were polarity-dead!) | - | - | - | rising |
+| oct10 eve | v5 multitask (14 ep, 24k) | 12 | 5 | 7 | 2 |
+| training | v6 fine-tune 30 ep, 60k, balanced+aug, case x1.5 | ? | ? | ? | ? |
+
+Bugs fixed oct10 (all silently catastrophic before):
+1. ImageDraw on RGBA writes alpha raw -> designs/noise rendered SOLID (looked
+   like ink). Now drawn on transparent overlays + true alpha_composite.
+2. Glyph paste off by half advance vs recorded anchor -> train/infer mismatch.
+3. dom sign computed BEFORE frame-ring strip -> any loose crop (page bg ring)
+   flipped polarity -> dead dom -> '111111' garbage. THIS killed real runs.
+4. Legacy v4 weights (net.* keys) wouldn't load into v5 class -> remap added.

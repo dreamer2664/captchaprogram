@@ -92,7 +92,7 @@
 | oct10 night | v7 on-the-fly 30ep + geometry cues | 72 | 27 | 30 | 8 |
 | oct10 night | v8 wide fc384, 40 ep; geometric post-passes OFF for multitask | 93 | 63 | 69 | - |
 | oct10 night | + uniform card sizes, gaps 1-5, no-ink speckle, loose valley | 93 | 63 | 69 | - |
-| oct11 | v9 hard-mix 50 ep + STYLE ROUTING (see below) | 93 | 76 | 82 | - |
+| oct11 | v9 hard-mix 50 ep + STYLE ROUTING (see below) | 93 | 76 | 82 | 67 |
 | training | v10 hard specialist (hard:real 4:1, erosion aug), 60 ep | ? | ? | ? | ? |
 
 v8 held-out per-char: easy 99.3 / hard 89.4 / real 88.2.

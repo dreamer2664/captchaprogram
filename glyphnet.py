@@ -118,10 +118,10 @@ class GlyphNet(nn.Module):
             nn.Linear(128 * 7 * 10, fc), nn.ReLU(True), nn.Dropout(0.25),
         )
         if multitask:
-            self.head_id = nn.Linear(192, len(ID36))
-            self.head_case = nn.Linear(192, 3)
+            self.head_id = nn.Linear(fc, len(ID36))
+            self.head_case = nn.Linear(fc, 3)
         else:
-            self.head = nn.Linear(192, n)
+            self.head = nn.Linear(fc, n)
 
     def forward(self, x):
         f = self.trunk(x)

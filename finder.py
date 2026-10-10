@@ -119,12 +119,18 @@ def _split_dual(box, mask):
         rows = np.where(sub.sum(axis=1) > 0)[0]
         if len(cols) < 30 or len(rows) < 12:
             continue
-        out.append((xx + int(cols[0]), y + int(rows[0]),
-                    int(cols[-1] - cols[0] + 1), int(rows[-1] - rows[0] + 1)))
+        pw, ph = int(cols[-1] - cols[0] + 1), int(rows[-1] - rows[0] + 1)
+        if ph < 30 or pw > 4.5 * ph:
+            continue                    # sliver / text row, not a card
+        out.append((xx + int(cols[0]), y + int(rows[0]), pw, ph))
+    if len(out) == 2:
+        h_sim = min(out[0][3], out[1][3]) / max(out[0][3], out[1][3])
+        if h_sim < 0.5:
+            return [box]                # not two side-by-side cards
     return out if len(out) == 2 else [box]
 
 
-def find_captcha_boxes(img, min_area=1600, thresh=30, max_boxes=2):
+def find_captcha_boxes(img, min_area=1600, thresh=24, max_boxes=2):
     """-> [(x,y,w,h), ...] up to max_boxes captcha rects, left-to-right.
 
     Two detection regimes are unioned (dual mode can mix one solid card with
@@ -138,12 +144,34 @@ def find_captcha_boxes(img, min_area=1600, thresh=30, max_boxes=2):
     H, W = a.shape[:2]
     page_bg = _bg_median(a)
     diff = np.abs(a - page_bg).max(axis=2)
+    # thresh 24: pale captcha cards (e.g. (214,228,240) on a (243,243,243)
+    # panel) differ by ~29 and become SOLID blobs; every page-chrome colour
+    # pair on the real layout stays under 24 (panels 237/243/255, borders 225)
     mask = (diff > thresh).astype(np.uint8)
+
+    # PRE-ERASE text rows ("You have to solve...", labels): wide, sparse,
+    # short bands are page furniture, and leaving them in lets the close
+    # operation fuse them into captcha cards a few pixels away.
+    mA0 = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+    n0, lab0, st0, _ = cv2.connectedComponentsWithStats(mA0, 8)
+    for i in range(1, n0):
+        x, y, w, h = st0[i, cv2.CC_STAT_LEFT], st0[i, cv2.CC_STAT_TOP], \
+                     st0[i, cv2.CC_STAT_WIDTH], st0[i, cv2.CC_STAT_HEIGHT]
+        sub = mask[y:y + h, x:x + w]
+        fill = float(sub.mean()) if sub.size else 0.0
+        if w > 4.0 * h and fill < 0.5 and h <= 35:
+            # erase ONLY this component's pixels: a captcha card overlapping
+            # the text row's bbox must keep its own ink
+            comp = (lab0[y:y + h, x:x + w] == i)
+            sub[comp] = 0
 
     maskA = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
     candsA = [c for c in _components(maskA, mask, min_area) if c["fill"] > 0.75]
-    maskB = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((15, 15), np.uint8))
-    candsB = _components(maskB, mask, min_area, h_min=20)
+    # horizontal-only close: chains glyphs of one captcha into a single cluster
+    # but NEVER bridges the vertical gap to a text row below/above it (that
+    # fusion was mutilating cards on the real page layout)
+    maskB = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((1, 25), np.uint8))
+    candsB = _components(maskB, mask, 150, h_min=20)
 
     cands = list(candsA)
     for c in candsB:
@@ -188,7 +216,7 @@ def find_captcha_boxes(img, min_area=1600, thresh=30, max_boxes=2):
                 start = None
         if start is not None:
             bands.append((start, len(rows)))
-        bands = [b for b in bands if b[1] - b[0] >= 20]
+        bands = [b for b in bands if b[1] - b[0] >= 12]
         if len(bands) > 1:
             for b0, b1 in bands:
                 piece = dict(c)
@@ -200,6 +228,45 @@ def find_captcha_boxes(img, min_area=1600, thresh=30, max_boxes=2):
     cands = [c for c in split if not _is_textrow(c)] or cands
     if not cands:
         return []
+
+    # (c) pre-split: a cluster that swallowed TWO cards (horizontal bridge >=
+    # the dual gap) is cut at a real empty gutter: >=8 consecutive near-zero
+    # ink columns inside the middle band.  Word gaps inside one captcha are
+    # <=6 columns, so a single card never gets cut.
+    presplit = []
+    for c in cands:
+        x, y, w, h = c["box"]
+        cols = mask[y:y + h, x:x + w].sum(axis=0).astype(np.float32)
+        lo, hi = int(w * 0.25), int(w * 0.75)
+        best_cut, best_run = None, 0
+        run = 0
+        for i in range(lo, hi):
+            if cols[i] < 0.05 * h:
+                run += 1
+                if run > best_run:
+                    best_run, best_cut = run, i - run // 2
+            else:
+                run = 0
+        if best_run >= 8 and best_cut is not None:
+            pieces = []
+            for xx, ww in ((x, best_cut), (x + best_cut, w - best_cut)):
+                sub = mask[y:y + h, xx:xx + ww]
+                cs = np.where(sub.sum(axis=0) > 0)[0]
+                rs = np.where(sub.sum(axis=1) > 0)[0]
+                if len(cs) < 30 or len(rs) < 12:
+                    continue
+                pw, ph = int(cs[-1] - cs[0] + 1), int(rs[-1] - rs[0] + 1)
+                if ph < 30 or pw > 4.5 * ph:
+                    continue
+                pieces.append(dict(box=(xx + int(cs[0]), y + int(rs[0]), pw, ph),
+                                   score=c["score"] * 0.5, fill=c["fill"]))
+            if len(pieces) == 2:
+                h_sim = min(pieces[0][3], pieces[1][3]) / max(pieces[0][3], pieces[1][3])
+                if h_sim > 0.5:
+                    presplit.extend(pieces)
+                    continue
+        presplit.append(c)
+    cands = presplit
 
     cands.sort(key=lambda c: -c["score"])
     seed = list(cands[0]["box"])

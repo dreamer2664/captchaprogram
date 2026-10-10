@@ -256,8 +256,8 @@ def find_captcha_boxes(img, min_area=1600, thresh=24, max_boxes=2):
                 if len(cs) < 30 or len(rs) < 12:
                     continue
                 pw, ph = int(cs[-1] - cs[0] + 1), int(rs[-1] - rs[0] + 1)
-                if ph < 30 or pw > 4.5 * ph:
-                    continue
+                if ph < 30 or pw > 4.5 * ph or pw < 90:
+                    continue        # sliver / text row / narrow tail
                 pieces.append(dict(box=(xx + int(cs[0]), y + int(rs[0]), pw, ph),
                                    score=c["score"] * 0.5, fill=c["fill"]))
             if len(pieces) == 2:

@@ -97,7 +97,9 @@ def render_page(dual=False, seed=None, meta=False, scale_range=(0.8, 1.5)):
     total = sum(c.width for c, _ in cards) + gap
     x = (W - total) // 2 + rng.randint(-40, 40)
     for i, (cap, truth) in enumerate(cards):
-        y = rng.randint(16, 100 - min(70, cap.height)) + 6
+        # the card lives inside row 1 (y 8..110) like on the real page
+        ymax = max(12, 108 - cap.height)
+        y = rng.randint(12, ymax)
         page.paste(cap, (x, y))
         boxes.append((x, y, cap.width, cap.height))
         texts.append(truth)

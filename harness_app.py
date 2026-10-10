@@ -12,6 +12,7 @@ import threading
 import time
 
 from flask import Flask, Response, jsonify, request
+import realpage
 
 import solver
 from generator import generate
@@ -27,7 +28,11 @@ _stats = {"rounds": 0, "correct": 0, "history": []}
 
 
 def _new_round() -> dict:
-    img, truth = generate()
+    # render the FULL real-page clone (single or dual) so the browser test
+    # exercises exactly what the runner sees on the user's screen
+    dual = random.random() < 0.5
+    page, meta = realpage.render_page(dual=dual, seed=None, meta=True)
+    img, truth = page, " ".join(meta["texts"])
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     rid = f"r{int(time.time()*1000)}{random.randint(100,999)}"

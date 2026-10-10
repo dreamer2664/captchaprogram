@@ -386,17 +386,20 @@ def read_glyphnet_debug(img: Image.Image, expected_len: int | None = None):
     res = glyphnet.classify_many(dom, xcs, baseline)
     out = [ch for ch, _ in res]
     confs = [cf for _, cf in res]
-    heights = [c["h"] for c in kept]
-    caps = [h for ch, h in zip(out, heights) if ch in TOP_CAP]
-    xhs = [h for ch, h in zip(out, heights) if ch in XHEIGHT_REF]
-    if caps and xhs:
-        cap = float(np.median(caps))
-        xh = float(np.median(xhs))
-        if cap - xh > 3:
-            for i, ch in enumerate(out):
-                if ch.lower() in AMBIG_CASE:
-                    out[i] = (ch.upper() if abs(heights[i] - cap)
-                              < abs(heights[i] - xh) else ch.lower())
+    # the v5 multitask model decides case with its own geometry head; the
+    # legacy height post-pass only applies to single-head (v4) weights
+    if not getattr(glyphnet.get_model(), "multitask", False):
+        heights = [c["h"] for c in kept]
+        caps = [h for ch, h in zip(out, heights) if ch in TOP_CAP]
+        xhs = [h for ch, h in zip(out, heights) if ch in XHEIGHT_REF]
+        if caps and xhs:
+            cap = float(np.median(caps))
+            xh = float(np.median(xhs))
+            if cap - xh > 3:
+                for i, ch in enumerate(out):
+                    if ch.lower() in AMBIG_CASE:
+                        out[i] = (ch.upper() if abs(heights[i] - cap)
+                                  < abs(heights[i] - xh) else ch.lower())
     mean_conf = sum(confs) / len(confs) if confs else 0.0
     return "".join(out), mean_conf, kept, dropped, dom
 

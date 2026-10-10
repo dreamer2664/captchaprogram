@@ -370,7 +370,7 @@ def read_template(img: Image.Image, expected_len: int | None = None) -> str:
     return "".join(out)
 
 
-AMBIG_CASE = set("cosuvwxz")        # glyph shape identical up to scale
+AMBIG_CASE = set("acemnorsuvwxz")   # x-height shapes: case = pure scale
 XHEIGHT_REF = set("acemnr")          # unambiguous x-height-only shapes
 
 

@@ -712,6 +712,11 @@ def train_v7(epochs: int = 30, patches_per_epoch: int = 24000, batch: int = 128,
                 gm = np.random.choice((0.8, 1.25))
                 x = x.clone()
                 x[:, 0] = x[:, 0].clamp(0, 1) ** gm
+            if ERODE_AUG and np.random.rand() < 0.5:
+                # mimic dom-gate thin-stroke erosion: soft-threshold ch0
+                x = x.clone()
+                t = np.random.uniform(0.05, 0.25)
+                x[:, 0] = (x[:, 0] - t).clamp(0, 1) / (1 - t)
             x = x + 0.02 * torch.rand_like(x) - 0.01
             li, lc = model(x)
             loss = crit(li, yid) + 1.5 * crit(lc, ycase)
@@ -771,6 +776,23 @@ def train_v9(epochs: int = 40, patches_per_epoch: int = 24000, batch: int = 128,
         train_v8(epochs, patches_per_epoch, batch, path=path, init=init)
     finally:
         STYLE_MIX = {"easy": 1, "hard": 1, "real": 1}
+ERODE_AUG = False  # v10: soft-threshold ch0 to mimic dom-gate thin-stroke erosion
+
+
+def train_v10(epochs: int = 60, patches_per_epoch: int = 24000, batch: int = 128,
+              path: str = "glyphnet10.pt", init: str = "glyphnet9.pt") -> None:
+    """HARD SPECIALIST (hard:real 4:1) + EROSION AUG: randomly clamp the
+    contrast channel the way the dom gate does to thin strokes, so the model
+    stops confusing eroded l/1/i/j and O/0 on designed backgrounds."""
+    import os
+    global STYLE_MIX, ERODE_AUG
+    STYLE_MIX = {"hard": 4, "real": 1}
+    ERODE_AUG = True
+    try:
+        train_v8(epochs, patches_per_epoch, batch, path=path, init=init)
+    finally:
+        STYLE_MIX = {"easy": 1, "hard": 1, "real": 1}
+        ERODE_AUG = False
 
 
 def train_v8(epochs: int = 40, patches_per_epoch: int = 24000, batch: int = 128,
@@ -828,6 +850,11 @@ def train_v8(epochs: int = 40, patches_per_epoch: int = 24000, batch: int = 128,
                 gm = np.random.choice((0.8, 1.25))
                 x = x.clone()
                 x[:, 0] = x[:, 0].clamp(0, 1) ** gm
+            if ERODE_AUG and np.random.rand() < 0.5:
+                # mimic dom-gate thin-stroke erosion: soft-threshold ch0
+                x = x.clone()
+                t = np.random.uniform(0.05, 0.25)
+                x[:, 0] = (x[:, 0] - t).clamp(0, 1) / (1 - t)
             x = x + 0.02 * torch.rand_like(x) - 0.01
             li, lc = model(x)
             loss = crit(li, yid) + 1.5 * crit(lc, ycase)
@@ -869,6 +896,7 @@ def train_v8(epochs: int = 40, patches_per_epoch: int = 24000, batch: int = 128,
 
 
 STYLE_MIX = {"easy": 1, "hard": 1, "real": 1}
+ERODE_AUG = False
 
 
 def _fresh_batch(batch: int, seed: int, mix=None):
@@ -916,6 +944,9 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "train5":
         train_v5(int(sys.argv[2]) if len(sys.argv) > 2 else 12,
                  int(sys.argv[3]) if len(sys.argv) > 3 else 24000)
+    if len(sys.argv) > 1 and sys.argv[1] == "train10":
+        train_v10(int(sys.argv[2]) if len(sys.argv) > 2 else 60,
+                  int(sys.argv[3]) if len(sys.argv) > 3 else 24000)
     if len(sys.argv) > 1 and sys.argv[1] == "train9":
         train_v9(int(sys.argv[2]) if len(sys.argv) > 2 else 40,
                  int(sys.argv[3]) if len(sys.argv) > 3 else 24000)

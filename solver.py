@@ -232,7 +232,8 @@ def _split_wide(c: dict, med_w: float, max_depth: int = 2) -> list[dict]:
     # touching PAIRS (w >= 1.9 med) may be cut at a shallow valley (ink of both
     # glyphs grazes the cut column); single wide glyphs (m w M W ~1.5-1.8 med)
     # never reach the width gate, so their stems stay intact
-    if col[cut] > 0.60 * peak:
+    limit = 0.75 * peak if c["w"] >= 1.7 * c["h"] else 0.60 * peak
+    if col[cut] > limit:
         return [c]
     parts = []
     for m, ox in ((c["m"][:, :cut], 0), (c["m"][:, cut:], cut)):

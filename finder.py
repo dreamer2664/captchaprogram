@@ -247,7 +247,9 @@ def find_captcha_boxes(img, min_area=1600, thresh=24, max_boxes=2):
                     best_run, best_cut = run, i - run // 2
             else:
                 run = 0
-        if best_run >= 8 and best_cut is not None:
+        # dual gutters are >=14 empty columns; word gaps inside one captcha
+        # reach 8-11 with wide fonts/rotation, so 12 separates them safely
+        if best_run >= 12 and best_cut is not None:
             pieces = []
             for xx, ww in ((x, best_cut), (x + best_cut, w - best_cut)):
                 sub = mask[y:y + h, xx:xx + ww]

@@ -781,8 +781,10 @@ def train_v8(epochs: int = 40, patches_per_epoch: int = 24000, batch: int = 128,
     is the next lever after data freshness."""
     import os
     model = GlyphNet(multitask=True, wide=True)
-    if not os.path.exists(init) and os.path.exists("glyphnet7.pt"):
-        init = "glyphnet7.pt"
+    for cand in (init, path, "glyphnet8.pt", "glyphnet.pt"):
+        if os.path.exists(cand):
+            init = cand
+            break
     if os.path.exists(init):
         sd = torch.load(init, map_location="cpu", weights_only=True)
         own = model.state_dict()

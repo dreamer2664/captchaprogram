@@ -464,9 +464,13 @@ def read_glyphnet_debug(img: Image.Image, expected_len: int | None = None):
             out[i] = out[i].upper()
         elif out[i] in set("GJPQY") and bot > baseline + 3:
             out[i] = out[i].lower()
-        # O vs 0: the zero is markedly narrower than the letter O
-        if out[i] in ("O", "0") and c["h"] > 10:
-            out[i] = "0" if c["w"] / c["h"] < 0.66 else "O"
+    # O vs 0: the zero is markedly narrower than the letter O in every
+    # proportional font; in monospace they are the same width -> skip there
+    mono = any(ch in "1lI" and h > 8 and w / h >= 0.5
+               for ch, w, h in zip(out, [c["w"] for c in kept], heights))
+    for i, c in enumerate(kept):
+        if out[i] in ("O", "0") and c["h"] > 10 and not mono:
+            out[i] = "0" if c["w"] / c["h"] < 0.85 else "O"
     mean_conf = sum(confs) / len(confs) if confs else 0.0
     return "".join(out), mean_conf, kept, dropped, dom
 

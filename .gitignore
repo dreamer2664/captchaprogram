@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+glyph_train*.npy
+glyphnet_prev.pt
+last_capture.png
+last_debug.png
+harness.log
+runner_config.json
+gemini_keys.txt

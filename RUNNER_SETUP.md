@@ -90,10 +90,22 @@
 | oct10 pm | + dom sign-after-ring fix (REAL pages were polarity-dead!) | - | - | - | rising |
 | oct10 eve | v5 multitask (14 ep, 24k) | 12 | 5 | 7 | 2 |
 | oct10 night | v7 on-the-fly 30ep + geometry cues | 72 | 27 | 30 | 8 |
-| training | v8 wide fc384, 40 ep, from v7 | ? | ? | ? | ? |
+| oct10 night | v8 wide fc384, 40 ep; geometric post-passes OFF for multitask | 93 | 63 | 69 | - |
+| oct10 night | + uniform card sizes, gaps 1-5, no-ink speckle, loose valley | 93 | 63 | 69 | - |
+| oct11 | v9 hard-mix 50 ep + STYLE ROUTING (see below) | 93 | 76 | 82 | - |
+| training | v10 hard specialist (hard:real 4:1, erosion aug), 60 ep | ? | ? | ? | ? |
 
-v7 held-out per-char: easy 95.6 / hard 86.7 / real 85.4.
-glyphnet.pt = v7 weights (v4 kept at glyphnet_v4_backup2.pt).
+v8 held-out per-char: easy 99.3 / hard 89.4 / real 88.2.
+v9 held-out per-char: easy 99.6 / hard 98.5 / real 97.5.
+
+STYLE ROUTING: the solver sniffs each card with a PCA test (are all pixels on
+one line in RGB = exactly two inks?).  Binary black/white cards go to
+`glyphnet_easy.pt` (v8 easy specialist, exact 93 >= bar 92); everything else
+goes to `glyphnet.pt` (hard-mix weights).  Both files must sit next to
+glyphnet.py; the runner finds them whichever folder you launch it from.
+
+Geometric case/descender/O-0 post-passes run ONLY for legacy v4 weights --
+on v8/v9 the multitask case head beats every hand rule (A/B: 92 vs 75 easy).
 
 Bugs fixed oct10 (all silently catastrophic before):
 1. ImageDraw on RGBA writes alpha raw -> designs/noise rendered SOLID (looked

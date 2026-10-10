@@ -89,7 +89,11 @@
 | oct10 pm | RGBA-alpha fix + anchor fix + dom-ink seg | 30 | 13 | 13 | 3 |
 | oct10 pm | + dom sign-after-ring fix (REAL pages were polarity-dead!) | - | - | - | rising |
 | oct10 eve | v5 multitask (14 ep, 24k) | 12 | 5 | 7 | 2 |
-| training | v6 fine-tune 30 ep, 60k, balanced+aug, case x1.5 | ? | ? | ? | ? |
+| oct10 night | v7 on-the-fly 30ep + geometry cues | 72 | 27 | 30 | 8 |
+| training | v8 wide fc384, 40 ep, from v7 | ? | ? | ? | ? |
+
+v7 held-out per-char: easy 95.6 / hard 86.7 / real 85.4.
+glyphnet.pt = v7 weights (v4 kept at glyphnet_v4_backup2.pt).
 
 Bugs fixed oct10 (all silently catastrophic before):
 1. ImageDraw on RGBA writes alpha raw -> designs/noise rendered SOLID (looked

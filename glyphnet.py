@@ -492,7 +492,7 @@ def train_v5(epochs: int = 12, samples: int = 24000, batch: int = 64,
         print(f"held-out {style}: {cv / Xv.shape[0]:.2%}", flush=True)
 
 
-def train_v6(epochs: int = 30, samples: int = 60000, batch: int = 128,
+def train_v6(epochs: int = 30, samples: int = 40000, batch: int = 128,
              path: str = "glyphnet6.pt", init: str = "glyphnet5.pt") -> None:
     """SCALE-UP fine-tune: start from the v5 weights, 60k patches, balanced
     classes, online augmentation, case-weighted loss, cosine LR.  The bars
@@ -522,14 +522,18 @@ def train_v6(epochs: int = 30, samples: int = 60000, batch: int = 128,
         np.save(cy1, Yid)
         np.save(cy2, Ycase)
         del X
-    M = np.load(cache, mmap_mode="r")
+    # resident fp16 tensor: memmap fancy-indexing scattered faults and blew
+    # the 2 GB sandbox RSS (OOM-kill at epoch ~2)
+    _raw = np.load(cache)
+    Xf = torch.from_numpy(_raw.astype(np.float16)) / 255.0
+    del _raw
     Yid = torch.from_numpy(np.load(cy1))
     Ycase = torch.from_numpy(np.load(cy2))
-    n = M.shape[0]
-    print(f"v6 dataset: {n} patches (memmap)", flush=True)
+    n = Xf.shape[0]
+    print(f"v6 dataset: {n} patches (resident fp16)", flush=True)
 
     def get(idx):
-        return torch.from_numpy(np.array(M[idx], dtype=np.float32) / 255.0)
+        return Xf[idx].float()
 
     # class-balanced sampler: rare chars (q j z digits) otherwise starve
     cnt = np.bincount(Yid.numpy(), minlength=len(ID36)).astype(float) + 1.0

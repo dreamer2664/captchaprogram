@@ -131,21 +131,28 @@ class GlyphNet(nn.Module):
 
 
 _model = None
+_models = {}
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def get_model(path: str = "glyphnet.pt"):
+def get_model(path: str = "glyphnet.pt", quiet: bool = False):
     """Load the trained weights.  The default path resolves NEXT TO THIS
     MODULE, not next to the current working directory: launching the runner
     from a different folder (or via a shortcut) must not silently produce a
     model-less process that answers every captcha with an empty string."""
     global _model
-    if _model is not None:
+    if path == "glyphnet.pt" and _model is not None:
         return _model
+    if path in _models:
+        return _models[path]
     if not os.path.isabs(path) and not os.path.exists(path):
         candidate = os.path.join(_HERE, path)
         if os.path.exists(candidate):
             path = candidate
+    if not os.path.exists(path):
+        if not quiet:
+            print(f"[glyphnet] no weights at {path!r}", flush=True)
+        return None
     try:
         sd = torch.load(path, map_location="cpu", weights_only=True)
         if any(k.startswith("net.") for k in sd):      # legacy v4 weights
@@ -158,7 +165,10 @@ def get_model(path: str = "glyphnet.pt"):
                      wide=wide)
         m.load_state_dict(sd)
         m.eval()
-        _model = m
+        if path == "glyphnet.pt":
+            _model = m
+        else:
+            _models[path] = m
         return m
     except Exception as e:
         print(f"[glyphnet] WARNING: could not load weights from {path!r}: {e}. "
@@ -206,13 +216,13 @@ def classify_many(dom: np.ndarray, xcs, base: float):
     return [(ALPHABET[int(i)], float(c)) for i, c in zip(idx, conf)]
 
 
-def classify_many_tta(dom: np.ndarray, xcs, base: float,
+def classify_many_tta(dom: np.ndarray, xcs, base: float, model=None,
                       jitters=((0.0, 0.0), (-1.5, 0.0), (1.5, 0.0),
                                (0.0, -1.0), (0.0, 1.0))):
     """TTA: average the softmax evidence over sub-pixel x-jitters.
     Rotated/AA glyphs sit near patch-grid boundaries; one forward per jitter
     costs ~1 ms each and removes a whole class of flip-flop errors."""
-    m = get_model()
+    m = model if model is not None else get_model()
     if m is None or len(xcs) == 0:
         return [("", 0.0)] * len(xcs)
     outs = []

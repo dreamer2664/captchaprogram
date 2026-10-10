@@ -413,6 +413,18 @@ def read_glyphnet_debug(img: Image.Image, expected_len: int | None = None):
     res = (glyphnet.classify_many_tta(dom, xcs, baseline)
            if getattr(glyphnet.get_model(), "tta", True)
            else glyphnet.classify_many(dom, xcs, baseline))
+    # ENSEMBLE: a second weights file (glyphnet8.pt) votes per glyph; the
+    # higher-confidence read wins disagreements (independent inits/errors)
+    m2 = glyphnet.get_model("glyphnet8.pt", quiet=True)
+    if m2 is not None and res and res[0][0]:
+        res2 = glyphnet.classify_many_tta(dom, xcs, baseline, model=m2)
+        merged = []
+        for (c1, f1), (c2, f2) in zip(res, res2):
+            if c1 == c2:
+                merged.append((c1, (f1 + f2) / 2))
+            else:
+                merged.append((c1, f1 * 1.0) if f1 >= f2 else (c2, f2))
+        res = merged
     out = [ch for ch, _ in res]
     confs = [cf for _, cf in res]
     # CASE POST-PASS (all models): vertical geometry is exact information —

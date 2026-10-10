@@ -107,14 +107,17 @@ def _detect(img, max_boxes=2):
 
 
 def _read_all(img, boxes, chars, t0, time_left_total):
-    """-> (answer, parts) where parts = [(text, src), ...] per captcha"""
+    """-> (answer, parts) where parts = [(text, src), ...] per captcha.
+    chars=0 in runner_config.json = length-AGNOSTIC reads (page varies the
+    word count between rounds)."""
     parts = []
+    exp = chars or None
     for i, b in enumerate(boxes):
         crop = img.crop((b[0], b[1], b[0] + b[2], b[1] + b[3]))
         remaining = time_left_total - (time.time() - t0)
-        type_est = 0.06 * (chars * len(boxes) + len(boxes) - 1) + 0.5
+        type_est = 0.06 * ((chars or 6) * len(boxes) + len(boxes) - 1) + 0.5
         text, src = solver.solve_budget(
-            crop, chars, time_left=max(remaining, 1.0), type_time=type_est)[:2]
+            crop, exp, time_left=max(remaining, 1.0), type_time=type_est)[:2]
         parts.append((text, src))
     answer = " ".join(p[0] for p in parts if p[0])
     return answer, parts
@@ -145,7 +148,7 @@ def once():
     print(f"captcha boxes found: {len(boxes)}  {[tuple(b) for b in boxes]}")
     print(f"text box: {tb if tb else 'NOT FOUND (auto-detect failed)'}")
     for i, (text, src) in enumerate(parts):
-        flag = "" if len(text) == chars else f"  WARN: {len(text)} chars!"
+        flag = "" if (not chars or len(text) == chars) else f"  WARN: {len(text)} chars!"
         print(f"  captcha {i+1}: {text!r} via {src}{flag}")
     print(f"ANSWER: {answer!r}  (read in {dt:.2f}s)")
     print("saved last_capture.png + last_debug.png — send both if wrong")

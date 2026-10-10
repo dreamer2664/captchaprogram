@@ -167,7 +167,7 @@ def generate(length: int | None = None, boxes: bool = False,
         return _generate_easy(length or 6, boxes)
     n = length or (random.randint(4, 8) if style == "hard" else 6)
     hard = style == "hard"
-    W = min(340, max(150, 30 * n + 34))
+    W = min(340, max(140, 24 * n + 28))   # real-page density (~24 px/char)
     bg = random.choice(CARD_BGS)
     card = Image.new("RGBA", (W, HEIGHT), bg + (255,))
     if hard:

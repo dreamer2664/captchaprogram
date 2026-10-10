@@ -175,7 +175,16 @@ def find_captcha_boxes(img, min_area=1600, thresh=24, max_boxes=2):
 
     cands = list(candsA)
     for c in candsB:
-        if not any(_iou_box(c["box"], a2["box"]) > 0.45 for a2 in candsA):
+        dup = [a2 for a2 in cands if _iou_box(c["box"], a2["box"]) > 0.45]
+        if not dup:
+            cands.append(c)
+            continue
+        # overlapping regimes describe the same ink: keep the BIGGER box (a
+        # cluster that swallowed two cards must not be thrown away just
+        # because it overlaps one solid card inside it)
+        biggest = max(dup, key=lambda d: d["box"][2] * d["box"][3])
+        if c["box"][2] * c["box"][3] > biggest["box"][2] * biggest["box"][3]:
+            cands.remove(biggest)
             cands.append(c)
 
     # Page furniture (yellow SUBMIT AND PAUSE, red CASE SENSITIVE label, the

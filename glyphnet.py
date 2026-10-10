@@ -759,9 +759,12 @@ def train_v8(epochs: int = 40, patches_per_epoch: int = 24000, batch: int = 128,
     model = GlyphNet(multitask=True, wide=True)
     if os.path.exists(init):
         sd = torch.load(init, map_location="cpu", weights_only=True)
-        miss, unexp = model.load_state_dict(sd, strict=False)
-        print(f"init from {init} (missing {len(miss)} keys re-init)",
-              flush=True)
+        own = model.state_dict()
+        sd = {k: v for k, v in sd.items()
+              if k in own and own[k].shape == v.shape}
+        miss, _unexp = model.load_state_dict(sd, strict=False)
+        print(f"init from {init}: {len(sd)} keys carried, "
+              f"{len(miss)} re-init", flush=True)
     opt = torch.optim.Adam(model.parameters(), 6e-4)
     crit = nn.CrossEntropyLoss()
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs,

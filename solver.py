@@ -478,6 +478,9 @@ def read_glyphnet_debug(img: Image.Image, expected_len: int | None = None):
         # descender = a THIN TAIL in the bottom quarter (stem width), vs the
         # wide bowl/curve a capital ends with.  Baseline-free: rotation moves
         # component bottoms +-4 px and made baseline rules misfire.
+        # descender = thin tail AND a hang below the no-tail baseline.
+        # J/P/Y have thin hooks but stop AT the line; rotated cards move
+        # plain baseline medians +-3 px, base2 (no-tail comps) is stable.
         if out[i] in set("gjpqy") and bot <= baseline + 2:
             out[i] = out[i].upper()
         elif out[i] in set("GJPQY") and bot > baseline + 3:

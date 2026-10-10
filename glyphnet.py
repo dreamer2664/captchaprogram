@@ -101,9 +101,12 @@ class GlyphNet(nn.Module):
     into a v5 model with case_head ignored?  No — shapes differ, so v5 lives
     in its own file and the solver picks whichever verifies better."""
 
-    def __init__(self, n: int = len(ALPHABET), multitask: bool = True):
+    def __init__(self, n: int = len(ALPHABET), multitask: bool = True,
+                 wide: bool = False):
         super().__init__()
         self.multitask = multitask
+        self.wide = wide
+        fc = 384 if wide else 192
         self.trunk = nn.Sequential(
             nn.Conv2d(2, 32, 3, padding=1), nn.BatchNorm2d(32), nn.ReLU(True),
             nn.MaxPool2d(2),
@@ -112,7 +115,7 @@ class GlyphNet(nn.Module):
             nn.Conv2d(64, 128, 3, padding=1), nn.BatchNorm2d(128), nn.ReLU(True),
             nn.MaxPool2d(2),
             nn.Flatten(),
-            nn.Linear(128 * 7 * 10, 192), nn.ReLU(True), nn.Dropout(0.25),
+            nn.Linear(128 * 7 * 10, fc), nn.ReLU(True), nn.Dropout(0.25),
         )
         if multitask:
             self.head_id = nn.Linear(192, len(ID36))
@@ -149,7 +152,10 @@ def get_model(path: str = "glyphnet.pt"):
             sd = {("head." + k.split(".", 2)[2] if k.startswith("net.16.")
                    else "trunk." + k.split(".", 1)[1]): v
                   for k, v in sd.items()}
-        m = GlyphNet(multitask=any(k.startswith("head_id") for k in sd))
+        wide = any(k == "trunk.13.weight" and v.shape[0] == 384
+                   for k, v in sd.items())
+        m = GlyphNet(multitask=any(k.startswith("head_id") for k in sd),
+                     wide=wide)
         m.load_state_dict(sd)
         m.eval()
         _model = m
@@ -744,6 +750,79 @@ def train_v7(epochs: int = 30, patches_per_epoch: int = 24000, batch: int = 128,
         print(f"held-out {style}: {cv / Xv.shape[0]:.2%}", flush=True)
 
 
+def train_v8(epochs: int = 40, patches_per_epoch: int = 24000, batch: int = 128,
+             path: str = "glyphnet8.pt", init: str = "glyphnet7.pt") -> None:
+    """WIDER trunk (fc 384) fine-tuned from v7 (conv layers carry over, the
+    fc/head re-init).  v7 plateaued ~96% train / 91% suite per-char; capacity
+    is the next lever after data freshness."""
+    import os
+    model = GlyphNet(multitask=True, wide=True)
+    if os.path.exists(init):
+        sd = torch.load(init, map_location="cpu", weights_only=True)
+        miss, unexp = model.load_state_dict(sd, strict=False)
+        print(f"init from {init} (missing {len(miss)} keys re-init)",
+              flush=True)
+    opt = torch.optim.Adam(model.parameters(), 6e-4)
+    crit = nn.CrossEntropyLoss()
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs,
+                                                       eta_min=1e-5)
+    steps = max(1, patches_per_epoch // batch)
+    best = 0.0
+    seed = 99117
+    for ep in range(epochs):
+        model.train()
+        tot = 0.0
+        seen = 0
+        t0 = time.time()
+        for _s in range(steps):
+            seed += 1
+            x, yid, ycase = _fresh_batch(batch, seed)
+            if np.random.rand() < 0.7:
+                dx, dy = int(np.random.randint(-1, 2)), int(np.random.randint(-1, 2))
+                x = torch.roll(x, shifts=(dy, dx), dims=(2, 3))
+            if np.random.rand() < 0.4:
+                gm = np.random.choice((0.8, 1.25))
+                x = x.clone()
+                x[:, 0] = x[:, 0].clamp(0, 1) ** gm
+            x = x + 0.02 * torch.rand_like(x) - 0.01
+            li, lc = model(x)
+            loss = crit(li, yid) + 1.5 * crit(lc, ycase)
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            tot += loss.item() * len(yid)
+            seen += len(yid)
+        sched.step()
+        acc = _quick_acc(model, 4000, seed=999)
+        print(f"epoch {ep+1}/{epochs} loss {tot/seen:.4f} char-acc {acc:.2%} "
+              f"lr {sched.get_last_lr()[0]:.2e} ({time.time()-t0:.0f}s)",
+              flush=True)
+        if acc > best:
+            best = acc
+            torch.save(model.state_dict(), path)
+            print(f"  saved ({acc:.2%})", flush=True)
+    model.eval()
+    for style in ("easy", "hard", "real"):
+        Xv, Yv = [], []
+        rng = np.random.default_rng(123)
+        for _ in range(120):
+            img, truth, boxes = generate(style=style, boxes=True)
+            dom = contrast_field(img)
+            for ch, (xc, base, _sz) in zip(truth, boxes):
+                Xv.append(patch(dom, xc + rng.uniform(-4, 4),
+                                base + rng.uniform(-6, 6)))
+                Yv.append(ch)
+        Xv = torch.from_numpy(np.stack(Xv)).float()
+        cv = 0
+        with torch.no_grad():
+            for i in range(0, Xv.shape[0], 500):
+                li, lc = model(Xv[i:i + 500])
+                pred = [char_of(a, b) for a, b in
+                        zip(li.argmax(-1).tolist(), lc.argmax(-1).tolist())]
+                cv += sum(p == t for p, t in zip(pred, Yv[i:i + 500]))
+        print(f"held-out {style}: {cv / Xv.shape[0]:.2%}", flush=True)
+
+
 def _fresh_batch(batch: int, seed: int):
     """-> (x float32 [B,2,P,WID], yid, ycase) generated live, mixed styles."""
     random.seed(seed)
@@ -786,6 +865,9 @@ def _quick_acc(model, m, seed=7):
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "train5":
         train_v5(int(sys.argv[2]) if len(sys.argv) > 2 else 12,
+                 int(sys.argv[3]) if len(sys.argv) > 3 else 24000)
+    if len(sys.argv) > 1 and sys.argv[1] == "train8":
+        train_v8(int(sys.argv[2]) if len(sys.argv) > 2 else 40,
                  int(sys.argv[3]) if len(sys.argv) > 3 else 24000)
     if len(sys.argv) > 1 and sys.argv[1] == "train7":
         train_v7(int(sys.argv[2]) if len(sys.argv) > 2 else 30,

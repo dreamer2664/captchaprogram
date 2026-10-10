@@ -761,12 +761,15 @@ def train_v7(epochs: int = 30, patches_per_epoch: int = 24000, batch: int = 128,
 
 
 def train_v8(epochs: int = 40, patches_per_epoch: int = 24000, batch: int = 128,
-             path: str = "glyphnet8.pt", init: str = "glyphnet7.pt") -> None:
+             path: str = "glyphnet8.pt",
+             init: str = "glyphnet8.pt") -> None:
     """WIDER trunk (fc 384) fine-tuned from v7 (conv layers carry over, the
     fc/head re-init).  v7 plateaued ~96% train / 91% suite per-char; capacity
     is the next lever after data freshness."""
     import os
     model = GlyphNet(multitask=True, wide=True)
+    if not os.path.exists(init) and os.path.exists("glyphnet7.pt"):
+        init = "glyphnet7.pt"
     if os.path.exists(init):
         sd = torch.load(init, map_location="cpu", weights_only=True)
         own = model.state_dict()
@@ -779,6 +782,19 @@ def train_v8(epochs: int = 40, patches_per_epoch: int = 24000, batch: int = 128,
     crit = nn.CrossEntropyLoss()
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs,
                                                        eta_min=1e-5)
+    floor = 0.0
+    if os.path.exists(path):
+        try:
+            sd = torch.load(path, map_location="cpu", weights_only=True)
+            prev = GlyphNet(multitask=True,
+                            wide=any(k == "trunk.13.weight" and v.shape[0] == 384
+                                     for k, v in sd.items()))
+            prev.load_state_dict(sd)
+            floor = _quick_acc(prev, 2000)
+            print(f"safety floor: {floor:.2%}", flush=True)
+            del prev
+        except Exception:
+            floor = 0.0
     steps = max(1, patches_per_epoch // batch)
     best = 0.0
     seed = 99117
@@ -812,8 +828,9 @@ def train_v8(epochs: int = 40, patches_per_epoch: int = 24000, batch: int = 128,
               flush=True)
         if acc > best:
             best = acc
-            torch.save(model.state_dict(), path)
-            print(f"  saved ({acc:.2%})", flush=True)
+            if acc > floor:
+                torch.save(model.state_dict(), path)
+                print(f"  saved ({acc:.2%} > floor {floor:.2%})", flush=True)
     model.eval()
     for style in ("easy", "hard", "real"):
         Xv, Yv = [], []

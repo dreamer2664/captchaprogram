@@ -526,18 +526,16 @@ def train_v6(epochs: int = 30, samples: int = 40000, batch: int = 128,
         np.save(cy1, Yid)
         np.save(cy2, Ycase)
         del X
-    # resident fp16 tensor: memmap fancy-indexing scattered faults and blew
-    # the 2 GB sandbox RSS (OOM-kill at epoch ~2)
-    _raw = np.load(cache)
-    Xf = torch.from_numpy(_raw.astype(np.float16)) / 255.0
-    del _raw
+    # resident uint8 tensor (zero-copy from the npy): fp16/float32 residents
+    # or memmap fancy-indexing both blew the 2 GB sandbox RSS (OOM-kills)
+    Xb = torch.from_numpy(np.load(cache))          # shares the numpy buffer
     Yid = torch.from_numpy(np.load(cy1))
     Ycase = torch.from_numpy(np.load(cy2))
-    n = Xf.shape[0]
-    print(f"v6 dataset: {n} patches (resident fp16)", flush=True)
+    n = Xb.shape[0]
+    print(f"v6 dataset: {n} patches (resident uint8)", flush=True)
 
     def get(idx):
-        return Xf[idx].float()
+        return Xb[idx].float().div_(255.0)
 
     # class-balanced sampler: rare chars (q j z digits) otherwise starve
     cnt = np.bincount(Yid.numpy(), minlength=len(ID36)).astype(float) + 1.0

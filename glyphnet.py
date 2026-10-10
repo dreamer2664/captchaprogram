@@ -216,9 +216,13 @@ def classify_many(dom: np.ndarray, xcs, base: float, model=None):
     return [(ALPHABET[int(i)], float(c)) for i, c in zip(idx, conf)]
 
 
+TTA_NARROW = ((0.0, 0.0), (-1.5, 0.0), (1.5, 0.0), (0.0, -1.0), (0.0, 1.0))
+TTA_WIDE = ((0.0, 0.0), (-2.5, 0.0), (2.5, 0.0), (0.0, -2.0), (0.0, 2.0),
+            (-1.5, -1.5), (1.5, 1.5), (1.5, -1.5), (-1.5, 1.5))
+
+
 def classify_many_tta(dom: np.ndarray, xcs, base: float, model=None,
-                      jitters=((0.0, 0.0), (-1.5, 0.0), (1.5, 0.0),
-                               (0.0, -1.0), (0.0, 1.0))):
+                      jitters=TTA_NARROW):
     """TTA: average the softmax evidence over sub-pixel x-jitters.
     Rotated/AA glyphs sit near patch-grid boundaries; one forward per jitter
     costs ~1 ms each and removes a whole class of flip-flop errors."""

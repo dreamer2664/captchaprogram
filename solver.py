@@ -447,8 +447,9 @@ def read_glyphnet_debug(img: Image.Image, expected_len: int | None = None):
     if glyphnet.get_model() is None:
         return "", 0.0, [], [], None
     img = norm_scale(img)
+    binary = _is_binary_card(img)
     model = (glyphnet.get_model("glyphnet_easy.pt", quiet=True)
-             if _is_binary_card(img) else glyphnet.get_model())
+             if binary else glyphnet.get_model())
     if model is None:
         model = glyphnet.get_model()
     dom, comps = analyze(img)
@@ -460,7 +461,8 @@ def read_glyphnet_debug(img: Image.Image, expected_len: int | None = None):
     for c in kept:
         ys, xs = np.where(c["m"])
         xcs.append(c["x"] + float(xs.mean()))
-    res = (glyphnet.classify_many_tta(dom, xcs, baseline, model=model)
+    jit = glyphnet.TTA_NARROW if binary else glyphnet.TTA_WIDE
+    res = (glyphnet.classify_many_tta(dom, xcs, baseline, model=model, jitters=jit)
            if getattr(model, "tta", True)
            else glyphnet.classify_many(dom, xcs, baseline, model=model))
     out = [ch for ch, _ in res]

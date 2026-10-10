@@ -230,7 +230,7 @@ def generate(length: int | None = None, boxes: bool = False,
     d = ImageDraw.Draw(over, "RGBA")
     for _ in range(random.randint(4, 7) if hard else random.randint(3, 5)):
         c = random.choice(NOISE_COLORS)
-        a = random.randint(70, 125)
+        a = random.randint(70, 110)
         x0, y0 = random.randint(-10, W // 2), random.randint(0, HEIGHT)
         x1, y1 = random.randint(W // 2, W + 10), random.randint(0, HEIGHT)
         d.line([(x0, y0), (x1, y1)], fill=c + (a,), width=1)

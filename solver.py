@@ -79,10 +79,23 @@ def analyze(img: Image.Image, diff_thresh: int = 62, min_area: int = 12):
     # patterns and scribbles are semi-transparent (dom <= ~0.6).  Building the
     # components from dom instead of colour-diff keeps objects from ever
     # touching (and fusing with) the glyphs.
-    ink = ((dom >= 0.88) & (mask > 0)).astype(np.uint8)
+    ink = ((dom >= 0.84) & (mask > 0)).astype(np.uint8)
     if ink.sum() < 20:                     # faint capture: fall back to mask
         ink = mask
     comps = _components(ink, min_area)
+    # CORE TRIM: the 0.84 gate keeps a 1-3 px AA halo (worst on inverted
+    # cards: white ink on black bleeds DOWN and inflates every bottom, which
+    # poisons the baseline and hides descenders).  Record halo-free top/bottom
+    # rows (dom >= 0.95) for geometry rules; y/h stay as the full patch box.
+    for c in comps:
+        sub = dom[c["y"]:c["y"] + c["h"], c["x"]:c["x"] + c["w"]]
+        rows = sub.max(axis=1)
+        core = np.where(rows >= 0.95)[0]
+        if core.size:
+            c["ytop"] = c["y"] + int(core.min())
+            c["ybot"] = c["y"] + int(core.max()) + 1
+        else:
+            c["ytop"], c["ybot"] = c["y"], c["y"] + c["h"]
     return dom, comps
 
 
@@ -396,7 +409,8 @@ def _baseline(comps) -> float:
     B, round glyphs eroded 1-3px up) plus optional descender spikes at
     [B+7, B+13].  Cut descenders at the largest downward gap >= 5px, then
     average the LOWER half of the main cluster (flat bottoms = truth)."""
-    bots = np.sort(np.array([c["y"] + c["h"] for c in comps], float))
+    bots = np.sort(np.array([c.get("ybot", c["y"] + c["h"]) for c in comps],
+                            float))
     if len(bots) == 0:
         return 0.0
     if len(bots) > 1:
@@ -443,7 +457,14 @@ def read_glyphnet_debug(img: Image.Image, expected_len: int | None = None):
         res = merged
     out = [ch for ch, _ in res]
     confs = [cf for _, cf in res]
-    # CASE POST-PASS (all models): vertical geometry is exact information —
+    # CASE POST-PASS (LEGACY v4 weights only): the v8 multitask case head
+    # reads the cap/x-height lines from the wide context channel itself; the
+    # hand rules were tuned on the old weak head and now flip correct reads
+    # more often than they fix wrong ones (A/B: rules off = easy 92 vs 75).
+    if getattr(glyphnet.get_model(), "multitask", False):
+        mean_conf = sum(confs) / len(confs) if confs else 0.0
+        return "".join(out), mean_conf, kept, dropped, dom
+
     # cap line vs x-height line separate 'C' from 'c' with ~10 px of margin.
     # The CNN case head gets a vote, but a glyph sitting ON the x-height line
     # is lowercase no matter what the head thought.
@@ -480,7 +501,7 @@ def read_glyphnet_debug(img: Image.Image, expected_len: int | None = None):
         top = int(np.argmax(rows > 0))
         zone = rows[top + 2: top + max(3, int(0.45 * c["h"]))]
         gap = bool(zone.size and 0 in zone)
-        bot = c["y"] + c["h"]
+        bot = c.get("ybot", c["y"] + c["h"])
         ch = out[i]
         if ch in ("i", "j") and not gap:
             out[i] = "j" if bot > baseline + 3 else "l"

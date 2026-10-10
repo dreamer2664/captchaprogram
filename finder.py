@@ -261,7 +261,8 @@ def find_captcha_boxes(img, min_area=1600, thresh=24, max_boxes=2):
                 pieces.append(dict(box=(xx + int(cs[0]), y + int(rs[0]), pw, ph),
                                    score=c["score"] * 0.5, fill=c["fill"]))
             if len(pieces) == 2:
-                h_sim = min(pieces[0][3], pieces[1][3]) / max(pieces[0][3], pieces[1][3])
+                h0, h1 = pieces[0]["box"][3], pieces[1]["box"][3]
+                h_sim = min(h0, h1) / max(h0, h1)
                 if h_sim > 0.5:
                     presplit.extend(pieces)
                     continue

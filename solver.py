@@ -430,6 +430,27 @@ def read_glyphnet_debug(img: Image.Image, expected_len: int | None = None):
                 if ch.lower() in AMBIG_CASE and abs(heights[i] - cap) != abs(heights[i] - xh):
                     want_upper = abs(heights[i] - cap) < abs(heights[i] - xh)
                     out[i] = ch.upper() if want_upper else ch.lower()
+    # GEOMETRY PASS 2: dot-gap and descender cues are exact information the
+    # CNN head keeps getting wrong (l/i 47 flips, J/j 43, Z/z 38 in mining).
+    #   i,j  : tittle = a row-gap inside the bbox;  l : stem continuous
+    #   gjpqy: lowercase tail hangs BELOW baseline; capitals stop at it
+    for i, c in enumerate(kept):
+        rows = c["m"].sum(axis=1)
+        top = int(np.argmax(rows > 0))
+        zone = rows[top + 2: top + max(3, int(0.45 * c["h"]))]
+        gap = bool(zone.size and 0 in zone)
+        bot = c["y"] + c["h"]
+        ch = out[i]
+        if ch in ("i", "j") and not gap:
+            out[i] = "j" if bot > baseline + 3 else "l"
+            if out[i] == "l" and ch == "j":
+                out[i] = "J" if bot <= baseline + 3 else "j"
+        elif ch == "l" and gap:
+            out[i] = "j" if bot > baseline + 3 else "i"
+        if out[i] in set("gjpqy") and bot <= baseline + 2:
+            out[i] = out[i].upper()
+        elif out[i] in set("GJPQY") and bot > baseline + 3:
+            out[i] = out[i].lower()
     mean_conf = sum(confs) / len(confs) if confs else 0.0
     return "".join(out), mean_conf, kept, dropped, dom
 

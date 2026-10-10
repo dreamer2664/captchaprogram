@@ -60,7 +60,28 @@ _FONT_CANDIDATES = [
     "C:/Windows/Fonts/georgia.ttf",
 ]
 import os as _os
-FONT_FILES = [p for p in _FONT_CANDIDATES if _os.path.exists(p)] or \
+
+
+def _font_has_glyphs(path: str) -> bool:
+    """some faces (STIXNonUni, DejaVuSerifDisplay) silently render DIGITS as
+    nothing — a captcha font pool must prove it can draw 0-9 and A-z"""
+    try:
+        from PIL import Image as _I, ImageDraw as _D
+        im = _I.new("RGBA", (200, 60), (0, 0, 0, 0))
+        _D.Draw(im).text((10, 10), "0aZ9", font=_I_font_truetype(path, 30),
+                         fill=(0, 0, 0, 255))
+        return im.getbbox() is not None
+    except Exception:
+        return False
+
+
+def _I_font_truetype(path, size):
+    from PIL import ImageFont as _IF
+    return _IF.truetype(path, size)
+
+
+FONT_FILES = [p for p in _FONT_CANDIDATES
+              if _os.path.exists(p) and _font_has_glyphs(p)] or \
              [_FONT_CANDIDATES[4]]
 _font_cache: dict = {}
 
@@ -74,14 +95,83 @@ def _font(path: str, size: int):
     return f
 
 
+# --- hard-mode background designs: objects & patterns behind the glyphs ----
+DESIGN_COLORS = [
+    (180, 120, 90), (90, 140, 180), (140, 180, 90), (180, 90, 140),
+    (120, 120, 190), (190, 160, 90), (100, 170, 160), (170, 130, 170),
+]
+
+
+def _paint_design(d, W, H):
+    """objects + patterns behind the text, like hostile real captchas"""
+    kind = random.randint(0, 5)
+    cols = DESIGN_COLORS
+    if kind == 0:                                  # stripes
+        c = random.choice(cols); a = random.randint(35, 70)
+        step = random.randint(6, 16)
+        for i in range(0, W + H, step):
+            d.line([(i, 0), (i - H, H)], fill=c + (a,), width=random.randint(2, 4))
+    elif kind == 1:                                # checkerboard
+        c = random.choice(cols); a = random.randint(30, 60)
+        s = random.randint(8, 20)
+        for yy in range(0, H, s):
+            for xx in range(0, W, s):
+                if (xx // s + yy // s) % 2 == 0:
+                    d.rectangle([xx, yy, xx + s - 1, yy + s - 1], fill=c + (a,))
+    elif kind == 2:                                # big soft blobs (objects)
+        for _ in range(random.randint(2, 4)):
+            c = random.choice(cols); a = random.randint(50, 90)
+            x0, y0 = random.randint(-20, W), random.randint(-10, H)
+            r = random.randint(15, 45)
+            d.ellipse([x0 - r, y0 - r, x0 + r, y0 + r], fill=c + (a,))
+    elif kind == 3:                                # rings / outlines
+        for _ in range(random.randint(2, 4)):
+            c = random.choice(cols); a = random.randint(70, 120)
+            x0, y0 = random.randint(0, W), random.randint(0, H)
+            r = random.randint(10, 35)
+            d.ellipse([x0 - r, y0 - r, x0 + r, y0 + r], outline=c + (a,),
+                      width=random.randint(2, 4))
+    elif kind == 4:                                # star / polygon objects
+        import math
+        for _ in range(random.randint(1, 3)):
+            c = random.choice(cols); a = random.randint(60, 110)
+            cx, cy = random.randint(10, W - 10), random.randint(10, H - 10)
+            r = random.randint(12, 30); pts = []
+            k = random.choice([5, 6, 3])
+            for i in range(k * 2):
+                rr = r if i % 2 == 0 else r * 0.45
+                ang = math.pi * i / k + random.uniform(-0.2, 0.2)
+                pts.append((cx + rr * math.cos(ang), cy + rr * math.sin(ang)))
+            d.polygon(pts, fill=c + (a,))
+    else:                                          # radial gradient wash
+        c = random.choice(cols)
+        cx, cy = random.randint(0, W), random.randint(0, H)
+        for r in range(70, 0, -6):
+            a = max(8, int(50 * (1 - r / 70)))
+            d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=c + (a,))
+
+
 LAST_BOXES: list = []
 
 
-def generate(length: int | None = None, boxes: bool = False):
-    """One captcha card, real-page style."""
-    n = length or 6
+def generate(length: int | None = None, boxes: bool = False,
+             style: str = "real"):
+    """One captcha card.
+    style="easy": clean binary (white bg/black ink or black bg/white ink),
+                  single font, no noise — the 92% bar suite
+    style="hard": designed backgrounds (objects/patterns), per-char font /
+                  color / size, 4-8 chars, heavy noise — the 85% bar suite
+    style="real": replica of the user's real page cards (default)
+    """
+    if style == "easy":
+        return _generate_easy(length or 6, boxes)
+    n = length or (random.randint(4, 8) if style == "hard" else 6)
+    hard = style == "hard"
     bg = random.choice(CARD_BGS)
     card = Image.new("RGBA", (WIDTH, HEIGHT), bg + (255,))
+    if hard:
+        dd = ImageDraw.Draw(card, "RGBA")
+        _paint_design(dd, WIDTH, HEIGHT)
     layer = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
 
     # per-character: font, size, color, rotation  (the hard-captcha axes)
@@ -135,19 +225,68 @@ def generate(length: int | None = None, boxes: bool = False):
 
     # --- noise ON TOP, exactly like the shot: thin scribbles + speckle -----
     d = ImageDraw.Draw(card, "RGBA")
-    for _ in range(random.randint(3, 5)):
+    for _ in range(random.randint(4, 7) if hard else random.randint(3, 5)):
         c = random.choice(NOISE_COLORS)
         a = random.randint(80, 150)
         x0, y0 = random.randint(-10, WIDTH // 2), random.randint(0, HEIGHT)
         x1, y1 = random.randint(WIDTH // 2, WIDTH + 10), random.randint(0, HEIGHT)
         d.line([(x0, y0), (x1, y1)], fill=c + (a,), width=1)
-    for _ in range(random.randint(25, 55)):
+    for _ in range(random.randint(40, 90) if hard else random.randint(25, 55)):
         c = random.choice(NOISE_COLORS + INK_COLORS)
         a = random.randint(90, 200)
         px, py = random.randint(0, WIDTH - 1), random.randint(0, HEIGHT - 1)
         d.point((px, py), fill=c + (a,))
 
     img = card.convert("RGB")
+    LAST_BOXES.clear()
+    LAST_BOXES.extend(char_boxes)
+    if boxes:
+        return img, text, list(char_boxes)
+    return img, text
+
+
+def _generate_easy(n: int, boxes: bool):
+    """clean binary captcha: white bg + black ink, or black bg + white ink"""
+    invert = random.random() < 0.5
+    bg = (0, 0, 0) if invert else (255, 255, 255)
+    ink = (255, 255, 255) if invert else (0, 0, 0)
+    card = Image.new("RGBA", (WIDTH, HEIGHT), bg + (255,))
+    layer = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+    font_path = random.choice(FONT_FILES)
+    specs = []
+    for _ in range(n):
+        specs.append(dict(ch=random.choice(CHARS), font=font_path,
+                          size=random.randint(30, 40), color=ink,
+                          rot=random.uniform(-10, 10)))
+    widths = [_font(s["font"], s["size"]).getlength(s["ch"]) for s in specs]
+    gaps = [random.randint(0, 3) for _ in range(n)]
+    for _shrink in range(6):
+        run = sum(widths) + sum(gaps)
+        if run <= WIDTH - 14:
+            break
+        for i, s in enumerate(specs):
+            s["size"] = max(20, int(s["size"] * 0.9))
+            widths[i] = _font(s["font"], s["size"]).getlength(s["ch"])
+    run = sum(widths) + sum(gaps)
+    x = (WIDTH - run) / 2
+    char_boxes = []
+    text = ""
+    for i, s in enumerate(specs):
+        f = _font(s["font"], s["size"])
+        pad = s["size"] * 2
+        glyph = Image.new("RGBA", (pad, pad), (0, 0, 0, 0))
+        ImageDraw.Draw(glyph).text((pad // 2, pad // 2), s["ch"], font=f,
+                                   fill=s["color"] + (255,), anchor="mm")
+        glyph = glyph.rotate(s["rot"], resample=Image.BICUBIC, expand=True)
+        yc = HEIGHT // 2 + random.randint(-3, 3)
+        layer.alpha_composite(glyph, (int(x - glyph.width / 2),
+                                      int(yc - glyph.height / 2)))
+        asc, _desc = f.getmetrics()
+        char_boxes.append((x + widths[i] / 2, yc - s["size"] / 2 + asc,
+                           s["size"]))
+        text += s["ch"]
+        x += widths[i] + gaps[i]
+    img = Image.alpha_composite(card, layer).convert("RGB")
     LAST_BOXES.clear()
     LAST_BOXES.extend(char_boxes)
     if boxes:

@@ -57,6 +57,18 @@
 - Console logs per round: text, reader, read-time, submit-time, warnings.
 - ABORT ANY TIME: mouse into a screen corner (pyautogui failsafe).
 
+## Accuracy bars & how they are measured
+- `python3 suite_read.py 100`  — local reader only, three suites:
+    easy  = clean binary cards (white/black, black/white)      bar: 92% exact
+    hard  = designed backgrounds (objects, patterns), mixed
+            fonts/colors/sizes, 4-8 chars                      bar: 85% exact
+    real  = replica of your real page's cards
+- `python3 suite_detect.py 100` — finder on the full real-page clone:
+    captcha boxes (single+dual), red-ring textbox, 14s-notice immunity.
+- `python3 suite_e2e.py 60`     — detect + read + space-join on whole pages.
+- The reader is a multi-task CNN (36-way case-folded identity + 3-way case
+  head) trained on all three styles at once with segmentation jitter.
+
 ## Troubleshooting
 - Wrong boxes detected on the FIRST round only: normal — the static-
   furniture filter needs one round of history; from round 2 it's clean.

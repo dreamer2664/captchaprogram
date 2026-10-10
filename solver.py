@@ -447,21 +447,6 @@ def read_glyphnet_debug(img: Image.Image, expected_len: int | None = None):
     # CNN head keeps getting wrong (l/i 47 flips, J/j 43, Z/z 38 in mining).
     #   i,j  : tittle = a row-gap inside the bbox;  l : stem continuous
     #   gjpqy: lowercase tail hangs BELOW baseline; capitals stop at it
-    tails = []
-    for c in kept:
-        rw = c["m"].sum(axis=1)
-        rw_nz = rw[rw > 0]
-        t = False
-        if len(rw_nz) >= 8:
-            tail = rw[int(0.78 * len(rw)):]
-            botz = tail[tail > 0]
-            midz = rw[int(0.30 * len(rw)):int(0.60 * len(rw))]
-            midz = midz[midz > 0]
-            if botz.size and midz.size:
-                t = float(botz.mean()) < 0.45 * float(midz.mean())
-        tails.append(t)
-    notail_bots = [c["y"] + c["h"] for c, t in zip(kept, tails) if not t]
-    base2 = float(np.median(notail_bots)) if notail_bots else baseline
     for i, c in enumerate(kept):
         rows = c["m"].sum(axis=1)
         top = int(np.argmax(rows > 0))

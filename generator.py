@@ -234,8 +234,10 @@ def generate(length: int | None = None, boxes: bool = False,
         x0, y0 = random.randint(-10, W // 2), random.randint(0, HEIGHT)
         x1, y1 = random.randint(W // 2, W + 10), random.randint(0, HEIGHT)
         d.line([(x0, y0), (x1, y1)], fill=c + (a,), width=1)
+    # speckle must NEVER mimic glyph ink: ink-coloured dots at high alpha
+    # pass the dom gate and glue onto thin glyphs (l -> i, j -> i errors)
     for _ in range(random.randint(40, 90) if hard else random.randint(25, 55)):
-        c = random.choice(NOISE_COLORS + INK_COLORS)
+        c = random.choice(NOISE_COLORS)
         a = random.randint(90, 200)
         px, py = random.randint(0, W - 1), random.randint(0, HEIGHT - 1)
         d.point((px, py), fill=c + (a,))

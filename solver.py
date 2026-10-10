@@ -73,7 +73,15 @@ def analyze(img: Image.Image, diff_thresh: int = 62, min_area: int = 20):
             mask[:, :3] = 0; mask[:, -3:] = 0
             dom[:3, :] = 0; dom[-3:, :] = 0
             dom[:, :3] = 0; dom[:, -3:] = 0
-    return dom, _components(mask, min_area)
+    # SOLID-INK MASK: glyph ink is opaque (dom ~1.0); background objects,
+    # patterns and scribbles are semi-transparent (dom <= ~0.6).  Building the
+    # components from dom instead of colour-diff keeps objects from ever
+    # touching (and fusing with) the glyphs.
+    ink = ((dom >= 0.75) & (mask > 0)).astype(np.uint8)
+    if ink.sum() < 20:                     # faint capture: fall back to mask
+        ink = mask
+    comps = _components(ink, min_area)
+    return dom, comps
 
 
 def _components(mask: np.ndarray, min_area: int = 20):
@@ -196,7 +204,12 @@ def _split_wide(c: dict, med_w: float, max_depth: int = 2) -> list[dict]:
     if hi <= lo:
         return [c]
     cut = lo + int(np.argmin(col[lo:hi]))
-    if col[cut] > 0.35 * c["h"]:
+    peak = float(col.max())
+    # touching PAIRS (w >= 1.9 med) may be cut at a shallow valley (ink of both
+    # glyphs grazes the cut column); single wide glyphs (m w M W ~1.5-1.8 med)
+    # never reach the width gate, so their stems stay intact
+    limit = 0.55 * peak if c["w"] >= 1.9 * med_w else 0.35 * c["h"]
+    if col[cut] > limit:
         return [c]
     parts = []
     for m, ox in ((c["m"][:, :cut], 0), (c["m"][:, cut:], cut)):
@@ -207,6 +220,10 @@ def _split_wide(c: dict, med_w: float, max_depth: int = 2) -> list[dict]:
         parts.append({"x": c["x"] + ox + xs.min(), "y": c["y"] + ys.min(),
                       "w": mm.shape[1], "h": mm.shape[0], "m": mm,
                       "area": int(mm.sum())})
+    if len(parts) == 2:
+        w0, w1 = parts[0]["w"], parts[1]["w"]
+        if min(w0, w1) < 0.5 * med_w:
+            return [c]                  # sliver cut: probably one wide glyph
     res = []
     for p in parts:
         res.extend(_split_wide(p, med_w, max_depth - 1))

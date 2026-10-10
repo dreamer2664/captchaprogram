@@ -213,7 +213,7 @@ def generate(length: int | None = None, boxes: bool = False,
                                    fill=s["color"] + (255,), anchor="mm")
         glyph = glyph.rotate(s["rot"], resample=Image.BICUBIC, expand=True)
         yc = HEIGHT // 2 + random.randint(-6, 6)
-        layer.alpha_composite(glyph, (int(x - glyph.width / 2),
+        layer.alpha_composite(glyph, (int(x + widths[i] / 2 - glyph.width / 2),
                                       int(yc - glyph.height / 2)))
         asc, _desc = f.getmetrics()
         char_boxes.append((x + widths[i] / 2, yc - s["size"] / 2 + asc,
@@ -259,7 +259,7 @@ def _generate_easy(n: int, boxes: bool):
                           size=random.randint(30, 40), color=ink,
                           rot=random.uniform(-10, 10)))
     widths = [_font(s["font"], s["size"]).getlength(s["ch"]) for s in specs]
-    gaps = [random.randint(0, 3) for _ in range(n)]
+    gaps = [random.randint(2, 6) for _ in range(n)]
     for _shrink in range(6):
         run = sum(widths) + sum(gaps)
         if run <= WIDTH - 14:
@@ -279,7 +279,7 @@ def _generate_easy(n: int, boxes: bool):
                                    fill=s["color"] + (255,), anchor="mm")
         glyph = glyph.rotate(s["rot"], resample=Image.BICUBIC, expand=True)
         yc = HEIGHT // 2 + random.randint(-3, 3)
-        layer.alpha_composite(glyph, (int(x - glyph.width / 2),
+        layer.alpha_composite(glyph, (int(x + widths[i] / 2 - glyph.width / 2),
                                       int(yc - glyph.height / 2)))
         asc, _desc = f.getmetrics()
         char_boxes.append((x + widths[i] / 2, yc - s["size"] / 2 + asc,

@@ -178,13 +178,13 @@ def generate(length: int | None = None, boxes: bool = False,
 
     # per-character: font, size, color, rotation  (the hard-captcha axes)
     adv_total = 0
-    specs = []
-    for _ in range(n):
-        size = random.randint(26, 44)
+    card_size = random.randint(26, 44)   # size varies PER CARD (like real
+    specs = []                           # captchas); per-char size would make
+    for _ in range(n):                   # case mathematically unreadable
         specs.append(dict(
             ch=random.choice(CHARS),
             font=random.choice(FONT_FILES),
-            size=size,
+            size=card_size,
             color=random.choice(INK_COLORS),
             rot=random.uniform(-12, 12),
         ))

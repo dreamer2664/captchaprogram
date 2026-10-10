@@ -374,6 +374,22 @@ AMBIG_CASE = set("acemnorsuvwxz")   # x-height shapes: case = pure scale
 XHEIGHT_REF = set("acemnr")          # unambiguous x-height-only shapes
 
 
+def _rot_drop(c) -> float:
+    """how far rotation pushes a comp's lowest pixel BELOW its true
+    baseline: half the width times sin(tilt).  Without this, +-10 deg cards
+    inflate the baseline median by 3-4 px and descender rules misfire."""
+    ys, xs = np.where(c["m"])
+    if len(xs) < 6:
+        return 0.0
+    pts = np.stack([xs, ys], 1).astype(np.float32)
+    bp = cv2.boxPoints(cv2.minAreaRect(pts))
+    e1, e2 = bp[1] - bp[0], bp[2] - bp[1]
+    e = e1 if np.hypot(*e1) >= np.hypot(*e2) else e2   # long edge
+    tilt = abs(float(np.degrees(np.arctan2(e[0], e[1]))))  # from vertical
+    tilt = min(tilt, 90.0 - tilt)
+    return 0.5 * c["w"] * abs(np.sin(np.deg2rad(tilt)))
+
+
 def _baseline(comps) -> float:
     """Baseline estimate that survives descenders and AA erosion:
     component bottoms form a main cluster at [B-3, B] (flat-bottom glyphs at

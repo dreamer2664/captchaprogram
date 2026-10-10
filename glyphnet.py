@@ -144,6 +144,10 @@ def get_model(path: str = "glyphnet.pt"):
             path = candidate
     try:
         sd = torch.load(path, map_location="cpu", weights_only=True)
+        if any(k.startswith("net.") for k in sd):      # legacy v4 weights
+            sd = {("head." + k.split(".", 2)[2] if k.startswith("net.16.")
+                   else "trunk." + k.split(".", 1)[1]): v
+                  for k, v in sd.items()}
         m = GlyphNet(multitask=any(k.startswith("head_id") for k in sd))
         m.load_state_dict(sd)
         m.eval()
@@ -193,6 +197,41 @@ def classify_many(dom: np.ndarray, xcs, base: float):
     idx = p.argmax(1)
     conf = p.gather(1, idx[:, None])[:, 0]
     return [(ALPHABET[int(i)], float(c)) for i, c in zip(idx, conf)]
+
+
+def classify_many_tta(dom: np.ndarray, xcs, base: float,
+                      jitters=(-1.5, 0.0, 1.5)):
+    """TTA: average the softmax evidence over sub-pixel x-jitters.
+    Rotated/AA glyphs sit near patch-grid boundaries; one forward per jitter
+    costs ~1 ms each and removes a whole class of flip-flop errors."""
+    m = get_model()
+    if m is None or len(xcs) == 0:
+        return [("", 0.0)] * len(xcs)
+    outs = []
+    with torch.no_grad():
+        for j in jitters:
+            x = torch.from_numpy(
+                np.stack([patch(dom, xc + j, base) for xc in xcs])).float()
+            o = m(x)
+            if getattr(m, "multitask", False):
+                pi, pc = o[0].softmax(-1), o[1].softmax(-1)
+                outs.append((pi, pc))
+            else:
+                outs.append((o.softmax(-1), None))
+    res = []
+    if getattr(m, "multitask", False):
+        pi = sum(o[0] for o in outs) / len(outs)
+        pc = sum(o[1] for o in outs) / len(outs)
+        ii, cc = pi.argmax(1), pc.argmax(1)
+        conf = pi.gather(1, ii[:, None])[:, 0] * pc.gather(1, cc[:, None])[:, 0]
+        res = [(char_of(int(a), int(b)), float(c))
+               for a, b, c in zip(ii, cc, conf)]
+    else:
+        p = sum(o[0] for o in outs) / len(outs)
+        idx = p.argmax(1)
+        conf = p.gather(1, idx[:, None])[:, 0]
+        res = [(ALPHABET[int(i)], float(c)) for i, c in zip(idx, conf)]
+    return res
 
 
 def train(epochs: int = 8, samples: int = 15000, batch: int = 64) -> None:

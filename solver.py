@@ -400,7 +400,9 @@ def read_glyphnet_debug(img: Image.Image, expected_len: int | None = None):
     for c in kept:
         ys, xs = np.where(c["m"])
         xcs.append(c["x"] + float(xs.mean()))
-    res = glyphnet.classify_many(dom, xcs, baseline)
+    res = (glyphnet.classify_many_tta(dom, xcs, baseline)
+           if getattr(glyphnet.get_model(), "tta", True)
+           else glyphnet.classify_many(dom, xcs, baseline))
     out = [ch for ch, _ in res]
     confs = [cf for _, cf in res]
     # the v5 multitask model decides case with its own geometry head; the

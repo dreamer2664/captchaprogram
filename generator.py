@@ -193,7 +193,7 @@ def generate(length: int | None = None, boxes: bool = False,
     widths = []
     for s in specs:
         widths.append(_font(s["font"], s["size"]).getlength(s["ch"]))
-    gaps = [random.randint(0, 4) for _ in range(n)]
+    gaps = [random.randint(1, 5) for _ in range(n)]
     for _shrink in range(6):
         run = sum(widths) + sum(gaps)
         if run <= W - 14:

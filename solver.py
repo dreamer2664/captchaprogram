@@ -423,6 +423,21 @@ def _baseline(comps) -> float:
     return float(bots[-k:].mean())
 
 
+def _is_binary_card(img: Image.Image) -> bool:
+    """easy cards are EXACTLY two inks (white/black either way): >97% of
+    pixels fall in the two dominant luma bins; designed/real cards spread
+    ink+background over many bins.  Routes each crop to its specialist."""
+    X = np.asarray(img.convert("RGB")).reshape(-1, 3).astype(np.float32)
+    X = X[::7]
+    Xc = X - X.mean(0)
+    try:
+        _u, _sv, vt = np.linalg.svd(Xc, full_matrices=False)
+    except np.linalg.LinAlgError:
+        return False
+    res = Xc - (Xc @ vt[0])[:, None] * vt[0]
+    return float(np.mean(np.linalg.norm(res, axis=1))) < 2.0
+
+
 def read_glyphnet_debug(img: Image.Image, expected_len: int | None = None):
     """-> (text, mean_confidence, kept_comps, dropped_comps, dom).
     Batched CNN + length-aware selection + per-image case consistency:
@@ -432,6 +447,10 @@ def read_glyphnet_debug(img: Image.Image, expected_len: int | None = None):
     if glyphnet.get_model() is None:
         return "", 0.0, [], [], None
     img = norm_scale(img)
+    model = (glyphnet.get_model("glyphnet_easy.pt", quiet=True)
+             if _is_binary_card(img) else glyphnet.get_model())
+    if model is None:
+        model = glyphnet.get_model()
     dom, comps = analyze(img)
     if not comps:
         return "", 0.0, [], [], dom
@@ -441,21 +460,9 @@ def read_glyphnet_debug(img: Image.Image, expected_len: int | None = None):
     for c in kept:
         ys, xs = np.where(c["m"])
         xcs.append(c["x"] + float(xs.mean()))
-    res = (glyphnet.classify_many_tta(dom, xcs, baseline)
-           if getattr(glyphnet.get_model(), "tta", True)
-           else glyphnet.classify_many(dom, xcs, baseline))
-    # ENSEMBLE: a second weights file (glyphnet8.pt) votes per glyph; the
-    # higher-confidence read wins disagreements (independent inits/errors)
-    m2 = glyphnet.get_model("glyphnet8.pt", quiet=True)
-    if m2 is not None and res and res[0][0]:
-        res2 = glyphnet.classify_many_tta(dom, xcs, baseline, model=m2)
-        merged = []
-        for (c1, f1), (c2, f2) in zip(res, res2):
-            if c1 == c2:
-                merged.append((c1, (f1 + f2) / 2))
-            else:
-                merged.append((c1, f1 * 1.0) if f1 >= f2 else (c2, f2))
-        res = merged
+    res = (glyphnet.classify_many_tta(dom, xcs, baseline, model=model)
+           if getattr(model, "tta", True)
+           else glyphnet.classify_many(dom, xcs, baseline, model=model))
     out = [ch for ch, _ in res]
     confs = [cf for _, cf in res]
     # CASE POST-PASS (LEGACY v4 weights only): the v8 multitask case head

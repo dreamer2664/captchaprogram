@@ -195,9 +195,9 @@ def classify(dom: np.ndarray, xc: float, base: float):
     return ALPHABET[i], float(p[i])
 
 
-def classify_many(dom: np.ndarray, xcs, base: float):
+def classify_many(dom: np.ndarray, xcs, base: float, model=None):
     """ONE batched forward for all glyphs -> [(char, confidence), ...]"""
-    m = get_model()
+    m = model if model is not None else get_model()
     if m is None or len(xcs) == 0:
         return [("", 0.0)] * len(xcs)
     x = torch.from_numpy(np.stack([patch(dom, xc, base) for xc in xcs])).float()

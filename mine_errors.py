@@ -29,15 +29,15 @@ def main():
     id_err = 0
     tot = 0
     for style in ("easy", "hard", "real"):
-        rng = random.Random(777 + len(style))
+        jit = random.Random(777 + len(style))
         for i in range(PER):
-            rng.seed(777 + len(style) + i)
+            random.seed(777 + len(style) * 1000 + i)   # generator = global rng
             img, truth, boxes = generator.generate(style=style, boxes=True)
             dom = contrast_field(img)
             base_j = None
             for ch, (xc, base, _sz) in zip(truth, boxes):
-                p = glyphnet.patch(dom, xc + rng.uniform(-1.5, 1.5),
-                                   base + rng.uniform(-2, 2))
+                p = glyphnet.patch(dom, xc + jit.uniform(-1.5, 1.5),
+                                   base + jit.uniform(-2, 2))
                 import torch
                 with torch.no_grad():
                     out = m(torch.from_numpy(p[None]).float())

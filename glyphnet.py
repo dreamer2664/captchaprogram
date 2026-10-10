@@ -68,10 +68,42 @@ def patch(dom: np.ndarray, xc: float, base: float) -> np.ndarray:
     return np.stack([ch0, ch1])
 
 
+# case-folded identity: 0-9 digits, then a-z  (36 classes)
+ID36 = string.digits + string.ascii_lowercase
+CASE_LOWER, CASE_UPPER, CASE_DIGIT = 0, 1, 2
+
+
+def id36_of(ch: str) -> int:
+    return ID36.index(ch.lower())
+
+
+def case_of(ch: str) -> int:
+    if ch.isdigit():
+        return CASE_DIGIT
+    return CASE_UPPER if ch.isupper() else CASE_LOWER
+
+
+def char_of(id36: int, case: int) -> str:
+    c = ID36[id36]
+    if c.isdigit():
+        return c
+    return c.upper() if case == CASE_UPPER else c
+
+
 class GlyphNet(nn.Module):
-    def __init__(self, n: int = len(ALPHABET)):
+    """v5: MULTI-TASK.  One trunk, two heads:
+         head_id   -> 36-way case-FOLDED identity (digits + a-z)
+         head_case -> 3-way {lower, upper, digit}
+    Joint 62-way classification forced one layer to do both jobs and capped
+    case accuracy ~70%; splitting them lets identity learn shape only while
+    case reads vertical geometry.  v4 weights (single 62-way head) still load
+    into a v5 model with case_head ignored?  No — shapes differ, so v5 lives
+    in its own file and the solver picks whichever verifies better."""
+
+    def __init__(self, n: int = len(ALPHABET), multitask: bool = True):
         super().__init__()
-        self.net = nn.Sequential(
+        self.multitask = multitask
+        self.trunk = nn.Sequential(
             nn.Conv2d(2, 32, 3, padding=1), nn.BatchNorm2d(32), nn.ReLU(True),
             nn.MaxPool2d(2),
             nn.Conv2d(32, 64, 3, padding=1), nn.BatchNorm2d(64), nn.ReLU(True),
@@ -80,11 +112,18 @@ class GlyphNet(nn.Module):
             nn.MaxPool2d(2),
             nn.Flatten(),
             nn.Linear(128 * 7 * 10, 192), nn.ReLU(True), nn.Dropout(0.25),
-            nn.Linear(192, n),
         )
+        if multitask:
+            self.head_id = nn.Linear(192, len(ID36))
+            self.head_case = nn.Linear(192, 3)
+        else:
+            self.head = nn.Linear(192, n)
 
     def forward(self, x):
-        return self.net(x)
+        f = self.trunk(x)
+        if self.multitask:
+            return self.head_id(f), self.head_case(f)
+        return self.head(f)
 
 
 _model = None
@@ -104,8 +143,9 @@ def get_model(path: str = "glyphnet.pt"):
         if os.path.exists(candidate):
             path = candidate
     try:
-        m = GlyphNet()
-        m.load_state_dict(torch.load(path, map_location="cpu", weights_only=True))
+        sd = torch.load(path, map_location="cpu", weights_only=True)
+        m = GlyphNet(multitask=any(k.startswith("head_id") for k in sd))
+        m.load_state_dict(sd)
         m.eval()
         _model = m
         return m
@@ -124,7 +164,12 @@ def classify(dom: np.ndarray, xc: float, base: float):
         return "", 0.0
     x = torch.from_numpy(patch(dom, xc, base)[None]).float()
     with torch.no_grad():
-        p = m(x).softmax(-1)[0]
+        out = m(x)
+        if getattr(m, "multitask", False):
+            pi, pc = out[0].softmax(-1)[0], out[1].softmax(-1)[0]
+            i, c = int(pi.argmax()), int(pc.argmax())
+            return char_of(i, c), float(pi[i]) * float(pc[c])
+        p = out.softmax(-1)[0]
     i = int(p.argmax())
     return ALPHABET[i], float(p[i])
 
@@ -136,7 +181,15 @@ def classify_many(dom: np.ndarray, xcs, base: float):
         return [("", 0.0)] * len(xcs)
     x = torch.from_numpy(np.stack([patch(dom, xc, base) for xc in xcs])).float()
     with torch.no_grad():
-        p = m(x).softmax(-1)
+        out = m(x)
+        if getattr(m, "multitask", False):
+            pi, pc = out[0].softmax(-1), out[1].softmax(-1)
+            ii, cc = pi.argmax(1), pc.argmax(1)
+            conf = pi.gather(1, ii[:, None])[:, 0] * \
+                   pc.gather(1, cc[:, None])[:, 0]
+            return [(char_of(int(a), int(b)), float(c))
+                    for a, b, c in zip(ii, cc, conf)]
+        p = out.softmax(-1)
     idx = p.argmax(1)
     conf = p.gather(1, idx[:, None])[:, 0]
     return [(ALPHABET[int(i)], float(c)) for i, c in zip(idx, conf)]
@@ -255,7 +308,141 @@ def train(epochs: int = 8, samples: int = 15000, batch: int = 64) -> None:
     print(f"held-out glyph accuracy: {cv / Xv.shape[0]:.2%}", flush=True)
 
 
+def train_v5(epochs: int = 12, samples: int = 24000, batch: int = 64,
+             path: str = "glyphnet5.pt") -> None:
+    """Multi-task training on the THREE bars at once:
+    easy (clean binary) / hard (designed bg, 4-8 chars) / real (page replica).
+    Identity head learns case-folded shape; case head learns vertical
+    geometry.  Saves only when better than the weights already on disk."""
+    import os
+    cache, cy1, cy2 = "glyph_train_v5.npy", "glyph_train_v5_yid.npy", \
+                      "glyph_train_v5_ycase.npy"
+    if not os.path.exists(cache):
+        X = np.zeros((samples, 2, P, WID), np.uint8)
+        Yid = np.zeros(samples, np.int64)
+        Ycase = np.zeros(samples, np.int64)
+        i = 0
+        print("generating mixed-style dataset...", flush=True)
+        rng = np.random.default_rng(0)
+        while i < samples:
+            style = ("easy", "hard", "real")[i % 3]
+            img, truth, boxes = generate(style=style, boxes=True)
+            dom = contrast_field(img)
+            for ch, (xc, base, _sz) in zip(truth, boxes):
+                xc_j = xc + rng.uniform(-4.0, 4.0)
+                base_j = base + rng.uniform(-6.0, 6.0)
+                X[i] = np.clip(patch(dom, xc_j, base_j) * 255, 0, 255)\
+                    .astype(np.uint8)
+                Yid[i] = id36_of(ch)
+                Ycase[i] = case_of(ch)
+                i += 1
+        np.save(cache, X)
+        np.save(cy1, Yid)
+        np.save(cy2, Ycase)
+        del X
+    M = np.load(cache, mmap_mode="r")
+    Yid = torch.from_numpy(np.load(cy1))
+    Ycase = torch.from_numpy(np.load(cy2))
+    n = M.shape[0]
+    print(f"v5 dataset: {n} patches (memmap)", flush=True)
+
+    def get(idx):
+        return torch.from_numpy(np.array(M[idx], dtype=np.float32) / 255.0)
+
+    floor = 0.0
+    if os.path.exists(path):
+        try:
+            sd = torch.load(path, map_location="cpu", weights_only=True)
+            prev = GlyphNet(multitask=any(k.startswith("head_id") for k in sd))
+            prev.load_state_dict(sd)
+            prev.eval()
+            c = 0
+            m0 = min(n, 3000)
+            with torch.no_grad():
+                for i in range(0, m0, 500):
+                    idx = torch.arange(i, min(i + 500, n))
+                    li, lc = prev(get(idx))
+                    pred = [char_of(a, b) for a, b in
+                            zip(li.argmax(-1).tolist(),
+                                lc.argmax(-1).tolist())]
+                    true = [char_of(a, b) for a, b in
+                            zip(Yid[idx].tolist(), Ycase[idx].tolist())]
+                    c += sum(p == t for p, t in zip(pred, true))
+            floor = c / m0
+            print(f"safety floor: existing v5 weights {floor:.2%} — new "
+                  f"epochs must beat it to save", flush=True)
+            del prev
+        except Exception:
+            floor = 0.0
+
+    model = GlyphNet(multitask=True)
+    opt = torch.optim.Adam(model.parameters(), 2e-3)
+    crit_id = nn.CrossEntropyLoss()
+    crit_case = nn.CrossEntropyLoss()
+    best = 0.0
+    for ep in range(epochs):
+        perm = torch.randperm(n)
+        model.train()
+        tot = 0.0
+        t0 = time.time()
+        for i in range(0, n, batch):
+            idx = perm[i:i + batch]
+            li, lc = model(get(idx))
+            loss = crit_id(li, Yid[idx]) + 0.5 * crit_case(lc, Ycase[idx])
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            tot += loss.item() * len(idx)
+        model.eval()
+        correct = 0
+        with torch.no_grad():
+            for i in range(0, n, 500):
+                idx = torch.arange(i, min(i + 500, n))
+                li, lc = model(get(idx))
+                pred = [char_of(a, b) for a, b in
+                        zip(li.argmax(-1).tolist(), lc.argmax(-1).tolist())]
+                true = [char_of(a, b) for a, b in zip(Yid[idx].tolist(),
+                                                      Ycase[idx].tolist())]
+                correct += sum(p == t for p, t in zip(pred, true))
+        acc = correct / n
+        print(f"epoch {ep+1}/{epochs} loss {tot/n:.4f} char-acc {acc:.2%} "
+              f"({time.time()-t0:.0f}s)", flush=True)
+        if acc > best:
+            best = acc
+            if acc > floor:
+                torch.save(model.state_dict(), path)
+                print(f"  saved ({acc:.2%} > floor {floor:.2%})", flush=True)
+            else:
+                print(f"  NOT saved: {acc:.2%} <= floor {floor:.2%}",
+                      flush=True)
+
+    # held-out per style, inference-like jitter
+    model.eval()
+    for style in ("easy", "hard", "real"):
+        Xv, Yv = [], []
+        rng = np.random.default_rng(123)
+        for _ in range(120):
+            img, truth, boxes = generate(style=style, boxes=True)
+            dom = contrast_field(img)
+            for ch, (xc, base, _sz) in zip(truth, boxes):
+                Xv.append(patch(dom, xc + rng.uniform(-4, 4),
+                                base + rng.uniform(-6, 6)))
+                Yv.append(ch)
+        Xv = torch.from_numpy(np.stack(Xv)).float()
+        cv = 0
+        with torch.no_grad():
+            for i in range(0, Xv.shape[0], 500):
+                li, lc = model(Xv[i:i + 500])
+                pred = [char_of(a, b) for a, b in
+                        zip(li.argmax(-1).tolist(), lc.argmax(-1).tolist())]
+                cv += sum(p == t for p, t in zip(pred, Yv[i:i + 500]))
+        print(f"held-out {style}: {cv / Xv.shape[0]:.2%}", flush=True)
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "train5":
+        train_v5(int(sys.argv[2]) if len(sys.argv) > 2 else 12,
+                 int(sys.argv[3]) if len(sys.argv) > 3 else 24000)
     if len(sys.argv) > 1 and sys.argv[1] == "train":
         train(int(sys.argv[2]) if len(sys.argv) > 2 else 8,
               int(sys.argv[3]) if len(sys.argv) > 3 else 15000)

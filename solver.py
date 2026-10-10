@@ -20,7 +20,10 @@ import cv2
 import numpy as np
 from PIL import Image
 
-import pytesseract
+try:
+    import pytesseract
+except Exception:                     # OCR fallback is optional; the CNN is not
+    pytesseract = None
 
 CHARSET = string.ascii_letters + string.digits
 
@@ -259,6 +262,8 @@ def norm_scale(img: Image.Image) -> Image.Image:
 def read_tesseract(img: Image.Image, expected_len: int | None = None) -> str:
     bin_img = preprocess(img)
     cfg = f"--psm 7 -c tessedit_char_whitelist={CHARSET}"
+    if pytesseract is None:
+        return ""
     t = _clean(pytesseract.image_to_string(bin_img, config=cfg), expected_len)
     if expected_len and len(t) != expected_len:
         raw = pytesseract.image_to_string(

@@ -55,12 +55,6 @@ def analyze(img: Image.Image, diff_thresh: int = 62, min_area: int = 12):
         sel = opened if opened.sum() > 20 else mask
     else:
         sel = mask
-    sign = 1.0
-    if sel.sum() > 20:
-        inside_lum = float(np.median(lum[sel > 0]))
-        sign = 1.0 if inside_lum < bg_lum else -1.0
-    dom = np.clip(sign * (bg_lum - lum), 0, 80) / 80.0
-
     # frame-ring guard: if the crop's perimeter is mostly "ink", the capture
     # contains a sliver/ring of page background around the card (loose box) —
     # that frame would fuse every glyph into full-height strips.  Strip it.
@@ -71,8 +65,16 @@ def analyze(img: Image.Image, diff_thresh: int = 62, min_area: int = 12):
         if ring.mean() > 0.45:
             mask[:3, :] = 0; mask[-3:, :] = 0
             mask[:, :3] = 0; mask[:, -3:] = 0
-            dom[:3, :] = 0; dom[-3:, :] = 0
-            dom[:, :3] = 0; dom[:, -3:] = 0
+    # sign AFTER the ring strip: a sliver of bright page background around a
+    # loose crop would otherwise flip the polarity and kill the whole dom
+    sign = 1.0
+    if mask.sum() > 20:
+        inside_lum = float(np.median(lum[mask > 0]))
+        sign = 1.0 if inside_lum < bg_lum else -1.0
+    dom = np.clip(sign * (bg_lum - lum), 0, 80) / 80.0
+    if H > 12 and W > 12 and ring.mean() > 0.45:
+        dom[:3, :] = 0; dom[-3:, :] = 0
+        dom[:, :3] = 0; dom[:, -3:] = 0
     # SOLID-INK MASK: glyph ink is opaque (dom ~1.0); background objects,
     # patterns and scribbles are semi-transparent (dom <= ~0.6).  Building the
     # components from dom instead of colour-diff keeps objects from ever

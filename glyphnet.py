@@ -368,6 +368,8 @@ def train_v5(epochs: int = 12, samples: int = 24000, batch: int = 64,
             img, truth, boxes = generate(style=style, boxes=True)
             dom = contrast_field(img)
             for ch, (xc, base, _sz) in zip(truth, boxes):
+                if i >= samples:
+                    break
                 xc_j = xc + rng.uniform(-4.0, 4.0)
                 base_j = base + rng.uniform(-6.0, 6.0)
                 X[i] = np.clip(patch(dom, xc_j, base_j) * 255, 0, 255)\
@@ -512,6 +514,8 @@ def train_v6(epochs: int = 30, samples: int = 40000, batch: int = 128,
             img, truth, boxes = generate(style=style, boxes=True)
             dom = contrast_field(img)
             for ch, (xc, base, _sz) in zip(truth, boxes):
+                if i >= samples:
+                    break
                 X[i] = np.clip(patch(dom, xc + rng.uniform(-4, 4),
                                      base + rng.uniform(-6, 6)) * 255,
                                0, 255).astype(np.uint8)

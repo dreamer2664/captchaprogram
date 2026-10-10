@@ -37,7 +37,7 @@ def _bg_median(a: np.ndarray) -> np.ndarray:
     return np.median(flat, axis=0)
 
 
-def analyze(img: Image.Image, diff_thresh: int = 62, min_area: int = 20):
+def analyze(img: Image.Image, diff_thresh: int = 62, min_area: int = 12):
     """SINGLE pass -> (dom, comps).
     dom:   signed contrast field in [0,1]; glyphs >= 0.875, lines <= 0.75
            (identical to crnn.contrast_field on normal-size images)
@@ -109,7 +109,7 @@ def _components(mask: np.ndarray, min_area: int = 20):
             for k in kept:
                 xov = min(c["x"] + c["w"], k["x"] + k["w"]) - max(c["x"], k["x"])
                 gap = k["y"] - (c["y"] + c["h"])
-                if xov > 0 and 0 <= gap <= 8:
+                if xov > 0 and 0 <= gap <= 10:
                     _merge_into(k, c)
                     merged = True
                     break
@@ -124,7 +124,10 @@ def _components(mask: np.ndarray, min_area: int = 20):
     for c in kept:
         out.extend(_split_wide(c, med_w))
 
-    # 3) re-attach fragments: gap<=1 px means same glyph (real gaps are >=3)
+    # 3) re-attach fragments: gap<=1 px AND the smaller side is a fragment
+    # (tittle, noise-cut sliver).  Two FULL glyphs 1px apart must stay split:
+    # merged they read as one character and the length dies.
+    med_a = sorted(c["area"] for c in out)[len(out) // 2] if out else 20
     out.sort(key=lambda c: c["x"])
     changed = True
     while changed:
@@ -132,7 +135,10 @@ def _components(mask: np.ndarray, min_area: int = 20):
         for i in range(len(out) - 1):
             a, b = out[i], out[i + 1]
             gap = b["x"] - (a["x"] + a["w"])
-            if gap <= 1 and a["w"] + b["w"] + gap <= 1.6 * med_w:
+            union_w = a["w"] + b["w"] + gap
+            if (gap <= 1 and union_w <= 1.6 * med_w
+                    and (min(a["area"], b["area"]) < 0.45 * med_a
+                         or union_w <= 1.15 * med_w)):
                 _merge_into(a, b)
                 out.pop(i + 1)
                 changed = True
@@ -197,7 +203,10 @@ def _merge_into(k: dict, c: dict) -> None:
 
 
 def _split_wide(c: dict, med_w: float, max_depth: int = 2) -> list[dict]:
-    if c["w"] <= 1.45 * med_w or max_depth == 0:
+    # width gate vs the comp's OWN height: mixed-size captchas make a global
+    # median width meaningless (a 44px 'M' is 2x a 26px-glyph median and was
+    # being cut in half).  Single glyphs are w <= ~1.0h; touching pairs >= 1.4h
+    if c["w"] <= 1.40 * c["h"] or max_depth == 0:
         return [c]
     col = c["m"].sum(axis=0)
     lo, hi = int(c["w"] * 0.25), int(c["w"] * 0.75)
@@ -208,8 +217,7 @@ def _split_wide(c: dict, med_w: float, max_depth: int = 2) -> list[dict]:
     # touching PAIRS (w >= 1.9 med) may be cut at a shallow valley (ink of both
     # glyphs grazes the cut column); single wide glyphs (m w M W ~1.5-1.8 med)
     # never reach the width gate, so their stems stay intact
-    limit = 0.55 * peak if c["w"] >= 1.9 * med_w else 0.35 * c["h"]
-    if col[cut] > limit:
+    if col[cut] > 0.60 * peak:
         return [c]
     parts = []
     for m, ox in ((c["m"][:, :cut], 0), (c["m"][:, cut:], cut)):
@@ -222,7 +230,7 @@ def _split_wide(c: dict, med_w: float, max_depth: int = 2) -> list[dict]:
                       "area": int(mm.sum())})
     if len(parts) == 2:
         w0, w1 = parts[0]["w"], parts[1]["w"]
-        if min(w0, w1) < 0.5 * med_w:
+        if min(w0, w1) < 0.42 * c["h"]:
             return [c]                  # sliver cut: probably one wide glyph
     res = []
     for p in parts:

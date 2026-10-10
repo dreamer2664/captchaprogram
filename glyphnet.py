@@ -709,7 +709,11 @@ def train_v7(epochs: int = 30, patches_per_epoch: int = 24000, batch: int = 128,
         for _s in range(steps):
             seed += 1
             x, yid, ycase = _fresh_batch(batch, seed)
-            if np.random.rand() < 0.7:
+            if BIG_JITTER:
+                if np.random.rand() < 0.85:
+                    dx = int(np.random.randint(-3, 4)); dy = int(np.random.randint(-3, 4))
+                    x = torch.roll(x, shifts=(dy, dx), dims=(2, 3))
+            elif np.random.rand() < 0.7:
                 dx, dy = int(np.random.randint(-1, 2)), int(np.random.randint(-1, 2))
                 x = torch.roll(x, shifts=(dy, dx), dims=(2, 3))
             if np.random.rand() < 0.4:
@@ -780,7 +784,25 @@ def train_v9(epochs: int = 40, patches_per_epoch: int = 24000, batch: int = 128,
         train_v8(epochs, patches_per_epoch, batch, path=path, init=init)
     finally:
         STYLE_MIX = {"easy": 1, "hard": 1, "real": 1}
+BIG_JITTER = False   # v11: roll patches +-3 px to mimic imperfect seg crops
 ERODE_AUG = False  # v10: soft-threshold ch0 to mimic dom-gate thin-stroke erosion
+
+
+def train_v11(epochs: int = 60, patches_per_epoch: int = 24000, batch: int = 128,
+              path: str = "glyphnet11.pt", init: str = "glyphnet10.pt") -> None:
+    """v10 recipe + BIG crop jitter: held-out patch acc (97.6 hard) far
+    exceeds suite per-char (88.8) -> the gap is crop placement, not vision.
+    Train on +-3 px mis-centred patches so the head tolerates seg error."""
+    global STYLE_MIX, ERODE_AUG, BIG_JITTER
+    STYLE_MIX = {"hard": 4, "real": 1}
+    ERODE_AUG = True
+    BIG_JITTER = True
+    try:
+        train_v8(epochs, patches_per_epoch, batch, path=path, init=init)
+    finally:
+        STYLE_MIX = {"easy": 1, "hard": 1, "real": 1}
+        ERODE_AUG = False
+        BIG_JITTER = False
 
 
 def train_v10(epochs: int = 60, patches_per_epoch: int = 24000, batch: int = 128,
@@ -847,7 +869,11 @@ def train_v8(epochs: int = 40, patches_per_epoch: int = 24000, batch: int = 128,
         for _s in range(steps):
             seed += 1
             x, yid, ycase = _fresh_batch(batch, seed)
-            if np.random.rand() < 0.7:
+            if BIG_JITTER:
+                if np.random.rand() < 0.85:
+                    dx = int(np.random.randint(-3, 4)); dy = int(np.random.randint(-3, 4))
+                    x = torch.roll(x, shifts=(dy, dx), dims=(2, 3))
+            elif np.random.rand() < 0.7:
                 dx, dy = int(np.random.randint(-1, 2)), int(np.random.randint(-1, 2))
                 x = torch.roll(x, shifts=(dy, dx), dims=(2, 3))
             if np.random.rand() < 0.4:
@@ -948,6 +974,9 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "train5":
         train_v5(int(sys.argv[2]) if len(sys.argv) > 2 else 12,
                  int(sys.argv[3]) if len(sys.argv) > 3 else 24000)
+    if len(sys.argv) > 1 and sys.argv[1] == "train11":
+        train_v11(int(sys.argv[2]) if len(sys.argv) > 2 else 60,
+                  int(sys.argv[3]) if len(sys.argv) > 3 else 24000)
     if len(sys.argv) > 1 and sys.argv[1] == "train10":
         train_v10(int(sys.argv[2]) if len(sys.argv) > 2 else 60,
                   int(sys.argv[3]) if len(sys.argv) > 3 else 24000)

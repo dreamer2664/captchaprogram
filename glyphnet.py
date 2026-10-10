@@ -760,6 +760,19 @@ def train_v7(epochs: int = 30, patches_per_epoch: int = 24000, batch: int = 128,
         print(f"held-out {style}: {cv / Xv.shape[0]:.2%}", flush=True)
 
 
+def train_v9(epochs: int = 40, patches_per_epoch: int = 24000, batch: int = 128,
+             path: str = "glyphnet9.pt", init: str = "glyphnet8.pt") -> None:
+    """HARD-REBALANCED fine-tune (60% hard cards): easy sits at the 92 bar,
+    hard needs the remaining capacity.  Same on-the-fly recipe as v8."""
+    import os
+    global STYLE_MIX
+    STYLE_MIX = {"easy": 1, "hard": 3, "real": 1}
+    try:
+        train_v8(epochs, patches_per_epoch, batch, path=path, init=init)
+    finally:
+        STYLE_MIX = {"easy": 1, "hard": 1, "real": 1}
+
+
 def train_v8(epochs: int = 40, patches_per_epoch: int = 24000, batch: int = 128,
              path: str = "glyphnet8.pt",
              init: str = "glyphnet8.pt") -> None:
@@ -853,13 +866,18 @@ def train_v8(epochs: int = 40, patches_per_epoch: int = 24000, batch: int = 128,
         print(f"held-out {style}: {cv / Xv.shape[0]:.2%}", flush=True)
 
 
-def _fresh_batch(batch: int, seed: int):
+STYLE_MIX = {"easy": 1, "hard": 1, "real": 1}
+
+
+def _fresh_batch(batch: int, seed: int, mix=None):
     """-> (x float32 [B,2,P,WID], yid, ycase) generated live, mixed styles."""
     random.seed(seed)
+    mix = mix or STYLE_MIX
+    pool = [s for s, w in mix.items() for _ in range(w)]
     xs, yid, ycase = [], [], []
     rng = np.random.default_rng(seed)
     while len(xs) < batch:
-        style = ("easy", "hard", "real")[len(xs) % 3]
+        style = pool[len(xs) % len(pool)]
         img, truth, boxes = generate(style=style, boxes=True)
         dom = contrast_field(img)
         for ch, (xc, base, _sz) in zip(truth, boxes):
@@ -895,6 +913,9 @@ def _quick_acc(model, m, seed=7):
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "train5":
         train_v5(int(sys.argv[2]) if len(sys.argv) > 2 else 12,
+                 int(sys.argv[3]) if len(sys.argv) > 3 else 24000)
+    if len(sys.argv) > 1 and sys.argv[1] == "train9":
+        train_v9(int(sys.argv[2]) if len(sys.argv) > 2 else 40,
                  int(sys.argv[3]) if len(sys.argv) > 3 else 24000)
     if len(sys.argv) > 1 and sys.argv[1] == "train8":
         train_v8(int(sys.argv[2]) if len(sys.argv) > 2 else 40,

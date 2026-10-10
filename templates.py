@@ -10,7 +10,15 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 GLYPH_BOX = 28
-FONTS = [
+# Use THE SAME FONTS the generator draws with (generator.FONT_FILES): the
+# template bank then matches the captive font set exactly.  System-font
+# fallbacks remain for machines where none of them exist.
+try:
+    import generator as _gen
+    FONTS = [p for p in _gen.FONT_FILES]
+except Exception:
+    FONTS = []
+FONTS += [
     "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
@@ -38,7 +46,10 @@ def _soft(bin28: np.ndarray) -> np.ndarray:
 
 
 def _render_norm(ch, font_path, size, rot):
-    font = ImageFont.truetype(font_path, size)
+    try:
+        font = ImageFont.truetype(font_path, size)
+    except OSError:
+        return None
     pad = size * 3
     im = Image.new("L", (pad, pad), 0)
     ImageDraw.Draw(im).text((pad // 2, pad // 2), ch, font=font, fill=255,

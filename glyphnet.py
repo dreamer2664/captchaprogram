@@ -9,6 +9,7 @@ Train:  python3 glyphnet.py train [epochs] [samples]
 """
 import shutil
 import os
+import random
 import string
 import sys
 import time
@@ -645,9 +646,147 @@ def train_v6(epochs: int = 30, samples: int = 40000, batch: int = 128,
         print(f"held-out {style}: {cv / Xv.shape[0]:.2%}", flush=True)
 
 
+def train_v7(epochs: int = 30, patches_per_epoch: int = 24000, batch: int = 128,
+             path: str = "glyphnet7.pt", init: str = "glyphnet6.pt") -> None:
+    """ON-THE-FLY training: every epoch regenerates its patches with FRESH
+    anchor jitter, so the dataset is effectively infinite and never lives in
+    RAM as one block (three OOM-kills taught us: no resident 40k tensor, no
+    memmap fancy-indexing).  RAM stays at the ~600 MB torch+cv2 baseline."""
+    import os
+    model = GlyphNet(multitask=True)
+    init = init if os.path.exists(init) else "glyphnet5.pt"
+    if os.path.exists(init):
+        model.load_state_dict(torch.load(init, map_location="cpu",
+                                         weights_only=True))
+        print(f"init from {init}", flush=True)
+    opt = torch.optim.Adam(model.parameters(), 8e-4)
+    crit = nn.CrossEntropyLoss()
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs,
+                                                       eta_min=1e-5)
+    floor = 0.0
+    if os.path.exists(path):
+        try:
+            sd = torch.load(path, map_location="cpu", weights_only=True)
+            prev = GlyphNet(multitask=True)
+            prev.load_state_dict(sd)
+            prev.eval()
+            floor = _quick_acc(prev, 2000)
+            print(f"safety floor: {floor:.2%}", flush=True)
+            del prev
+        except Exception:
+            floor = 0.0
+
+    steps = max(1, patches_per_epoch // batch)
+    best = 0.0
+    seed = 4242
+    for ep in range(epochs):
+        model.train()
+        tot = 0.0
+        seen = 0
+        t0 = time.time()
+        for _s in range(steps):
+            seed += 1
+            x, yid, ycase = _fresh_batch(batch, seed)
+            if np.random.rand() < 0.7:
+                dx, dy = int(np.random.randint(-1, 2)), int(np.random.randint(-1, 2))
+                x = torch.roll(x, shifts=(dy, dx), dims=(2, 3))
+            if np.random.rand() < 0.4:
+                gm = np.random.choice((0.8, 1.25))
+                x = x.clone()
+                x[:, 0] = x[:, 0].clamp(0, 1) ** gm
+            x = x + 0.02 * torch.rand_like(x) - 0.01
+            li, lc = model(x)
+            loss = crit(li, yid) + 1.5 * crit(lc, ycase)
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            tot += loss.item() * len(yid)
+            seen += len(yid)
+        sched.step()
+        acc = _quick_acc(model, 4000, seed=999)
+        print(f"epoch {ep+1}/{epochs} loss {tot/seen:.4f} char-acc {acc:.2%} "
+              f"lr {sched.get_last_lr()[0]:.2e} ({time.time()-t0:.0f}s)",
+              flush=True)
+        if ep == 0 and acc < 0.10:
+            print("  dead init — re-rolling", flush=True)
+            model = GlyphNet(multitask=True)
+            opt = torch.optim.Adam(model.parameters(), 8e-4)
+            sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+                opt, T_max=epochs, eta_min=1e-5)
+            continue
+        if acc > best:
+            best = acc
+            if acc > floor:
+                torch.save(model.state_dict(), path)
+                print(f"  saved ({acc:.2%} > floor {floor:.2%})", flush=True)
+
+    model.eval()
+    for style in ("easy", "hard", "real"):
+        Xv, Yv = [], []
+        rng = np.random.default_rng(123)
+        for _ in range(120):
+            img, truth, boxes = generate(style=style, boxes=True)
+            dom = contrast_field(img)
+            for ch, (xc, base, _sz) in zip(truth, boxes):
+                Xv.append(patch(dom, xc + rng.uniform(-4, 4),
+                                base + rng.uniform(-6, 6)))
+                Yv.append(ch)
+        Xv = torch.from_numpy(np.stack(Xv)).float()
+        cv = 0
+        with torch.no_grad():
+            for i in range(0, Xv.shape[0], 500):
+                li, lc = model(Xv[i:i + 500])
+                pred = [char_of(a, b) for a, b in
+                        zip(li.argmax(-1).tolist(), lc.argmax(-1).tolist())]
+                cv += sum(p == t for p, t in zip(pred, Yv[i:i + 500]))
+        print(f"held-out {style}: {cv / Xv.shape[0]:.2%}", flush=True)
+
+
+def _fresh_batch(batch: int, seed: int):
+    """-> (x float32 [B,2,P,WID], yid, ycase) generated live, mixed styles."""
+    random.seed(seed)
+    xs, yid, ycase = [], [], []
+    rng = np.random.default_rng(seed)
+    while len(xs) < batch:
+        style = ("easy", "hard", "real")[len(xs) % 3]
+        img, truth, boxes = generate(style=style, boxes=True)
+        dom = contrast_field(img)
+        for ch, (xc, base, _sz) in zip(truth, boxes):
+            if len(xs) >= batch:
+                break
+            xs.append(patch(dom, xc + rng.uniform(-4, 4),
+                            base + rng.uniform(-6, 6)))
+            yid.append(id36_of(ch))
+            ycase.append(case_of(ch))
+    return (torch.from_numpy(np.stack(xs)).float(),
+            torch.tensor(yid, dtype=torch.long),
+            torch.tensor(ycase, dtype=torch.long))
+
+
+def _quick_acc(model, m, seed=7):
+    model.eval()
+    c = 0
+    done = 0
+    with torch.no_grad():
+        while done < m:
+            x, yid, ycase = _fresh_batch(min(500, m - done), seed)
+            seed += 1
+            li, lc = model(x)
+            pred = [char_of(a, b) for a, b in
+                    zip(li.argmax(-1).tolist(), lc.argmax(-1).tolist())]
+            true = [char_of(a, b) for a, b in
+                    zip(yid.tolist(), ycase.tolist())]
+            c += sum(p == t for p, t in zip(pred, true))
+            done += len(x)
+    return c / m
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "train5":
         train_v5(int(sys.argv[2]) if len(sys.argv) > 2 else 12,
+                 int(sys.argv[3]) if len(sys.argv) > 3 else 24000)
+    if len(sys.argv) > 1 and sys.argv[1] == "train7":
+        train_v7(int(sys.argv[2]) if len(sys.argv) > 2 else 30,
                  int(sys.argv[3]) if len(sys.argv) > 3 else 24000)
     if len(sys.argv) > 1 and sys.argv[1] == "train6":
         train_v6(int(sys.argv[2]) if len(sys.argv) > 2 else 30,

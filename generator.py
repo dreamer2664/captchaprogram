@@ -258,10 +258,11 @@ def _generate_easy(n: int, boxes: bool):
     card = Image.new("RGBA", (W, HEIGHT), bg + (255,))
     layer = Image.new("RGBA", (W, HEIGHT), (0, 0, 0, 0))
     font_path = random.choice(FONT_FILES)
-    specs = []
+    card_size = random.randint(30, 40)     # ONE size per card: cap/x-height
+    specs = []                             # lines stay exact for case reads
     for _ in range(n):
         specs.append(dict(ch=random.choice(CHARS), font=font_path,
-                          size=random.randint(30, 40), color=ink,
+                          size=card_size, color=ink,
                           rot=random.uniform(-10, 10)))
     widths = [_font(s["font"], s["size"]).getlength(s["ch"]) for s in specs]
     gaps = [random.randint(2, 6) for _ in range(n)]

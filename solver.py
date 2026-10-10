@@ -420,11 +420,24 @@ def read_glyphnet_debug(img: Image.Image, expected_len: int | None = None):
     # The CNN case head gets a vote, but a glyph sitting ON the x-height line
     # is lowercase no matter what the head thought.
     heights = [c["h"] for c in kept]
-    caps = [h for ch, h in zip(out, heights) if ch in TOP_CAP]
-    xhs = [h for ch, h in zip(out, heights) if ch in XHEIGHT_REF]
-    if caps and xhs:
-        cap = float(np.median(caps))
-        xh = float(np.median(xhs))
+    # LINE ESTIMATE by BIMODAL HEIGHT SPLIT: class-medians get polluted by the
+    # very misreads we are fixing (one 'S' read for 's' drags the cap median
+    # down to x-height and disables the whole pass).  Heights cluster at
+    # {cap/asc} and {x-height}; the widest gap >= 4 px separates them.
+    hs = sorted(h for ch, h in zip(out, heights)
+                if ch.lower() not in set("gjpqy"))
+    cap = xh = None
+    if len(hs) >= 2:
+        gaps = np.diff(hs)
+        gi = int(np.argmax(gaps))
+        if gaps[gi] >= 4:
+            up, lo = hs[gi + 1:], hs[: gi + 1]
+            # uniform-size cards only: mixed sizes smear both clusters and
+            # the "lines" become meaningless (hard style keeps mixed sizes)
+            if (max(up) - min(up) <= 4) and (max(lo) - min(lo) <= 4):
+                cap = float(np.median(up))
+                xh = float(np.median(lo))
+    if cap is not None and xh is not None:
         if cap - xh > 3:
             for i, ch in enumerate(out):
                 if ch.lower() in AMBIG_CASE and abs(heights[i] - cap) != abs(heights[i] - xh):
@@ -451,6 +464,9 @@ def read_glyphnet_debug(img: Image.Image, expected_len: int | None = None):
             out[i] = out[i].upper()
         elif out[i] in set("GJPQY") and bot > baseline + 3:
             out[i] = out[i].lower()
+        # O vs 0: the zero is markedly narrower than the letter O
+        if out[i] in ("O", "0") and c["h"] > 10:
+            out[i] = "0" if c["w"] / c["h"] < 0.66 else "O"
     mean_conf = sum(confs) / len(confs) if confs else 0.0
     return "".join(out), mean_conf, kept, dropped, dom
 

@@ -201,7 +201,8 @@ def classify_many(dom: np.ndarray, xcs, base: float):
 
 
 def classify_many_tta(dom: np.ndarray, xcs, base: float,
-                      jitters=(-1.5, 0.0, 1.5)):
+                      jitters=((0.0, 0.0), (-1.5, 0.0), (1.5, 0.0),
+                               (0.0, -1.0), (0.0, 1.0))):
     """TTA: average the softmax evidence over sub-pixel x-jitters.
     Rotated/AA glyphs sit near patch-grid boundaries; one forward per jitter
     costs ~1 ms each and removes a whole class of flip-flop errors."""
@@ -210,9 +211,10 @@ def classify_many_tta(dom: np.ndarray, xcs, base: float,
         return [("", 0.0)] * len(xcs)
     outs = []
     with torch.no_grad():
-        for j in jitters:
+        for jx, jy in jitters:
             x = torch.from_numpy(
-                np.stack([patch(dom, xc + j, base) for xc in xcs])).float()
+                np.stack([patch(dom, xc + jx, base + jy) for xc in xcs])
+            ).float()
             o = m(x)
             if getattr(m, "multitask", False):
                 pi, pc = o[0].softmax(-1), o[1].softmax(-1)

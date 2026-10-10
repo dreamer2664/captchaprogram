@@ -77,7 +77,7 @@ def analyze(img: Image.Image, diff_thresh: int = 62, min_area: int = 20):
     # patterns and scribbles are semi-transparent (dom <= ~0.6).  Building the
     # components from dom instead of colour-diff keeps objects from ever
     # touching (and fusing with) the glyphs.
-    ink = ((dom >= 0.75) & (mask > 0)).astype(np.uint8)
+    ink = ((dom >= 0.88) & (mask > 0)).astype(np.uint8)
     if ink.sum() < 20:                     # faint capture: fall back to mask
         ink = mask
     comps = _components(ink, min_area)

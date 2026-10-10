@@ -107,12 +107,12 @@ def _paint_design(d, W, H):
     kind = random.randint(0, 5)
     cols = DESIGN_COLORS
     if kind == 0:                                  # stripes
-        c = random.choice(cols); a = random.randint(35, 70)
+        c = random.choice(cols); a = random.randint(25, 50)
         step = random.randint(6, 16)
         for i in range(0, W + H, step):
             d.line([(i, 0), (i - H, H)], fill=c + (a,), width=random.randint(2, 4))
     elif kind == 1:                                # checkerboard
-        c = random.choice(cols); a = random.randint(30, 60)
+        c = random.choice(cols); a = random.randint(22, 45)
         s = random.randint(8, 20)
         for yy in range(0, H, s):
             for xx in range(0, W, s):
@@ -120,13 +120,13 @@ def _paint_design(d, W, H):
                     d.rectangle([xx, yy, xx + s - 1, yy + s - 1], fill=c + (a,))
     elif kind == 2:                                # big soft blobs (objects)
         for _ in range(random.randint(2, 4)):
-            c = random.choice(cols); a = random.randint(50, 90)
+            c = random.choice(cols); a = random.randint(25, 50)
             x0, y0 = random.randint(-20, W), random.randint(-10, H)
             r = random.randint(15, 45)
             d.ellipse([x0 - r, y0 - r, x0 + r, y0 + r], fill=c + (a,))
     elif kind == 3:                                # rings / outlines
         for _ in range(random.randint(2, 4)):
-            c = random.choice(cols); a = random.randint(70, 120)
+            c = random.choice(cols); a = random.randint(50, 90)
             x0, y0 = random.randint(0, W), random.randint(0, H)
             r = random.randint(10, 35)
             d.ellipse([x0 - r, y0 - r, x0 + r, y0 + r], outline=c + (a,),
@@ -134,7 +134,7 @@ def _paint_design(d, W, H):
     elif kind == 4:                                # star / polygon objects
         import math
         for _ in range(random.randint(1, 3)):
-            c = random.choice(cols); a = random.randint(60, 110)
+            c = random.choice(cols); a = random.randint(40, 80)
             cx, cy = random.randint(10, W - 10), random.randint(10, H - 10)
             r = random.randint(12, 30); pts = []
             k = random.choice([5, 6, 3])
@@ -147,7 +147,7 @@ def _paint_design(d, W, H):
         c = random.choice(cols)
         cx, cy = random.randint(0, W), random.randint(0, H)
         for r in range(70, 0, -6):
-            a = max(8, int(50 * (1 - r / 70)))
+            a = max(6, int(40 * (1 - r / 70)))
             d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=c + (a,))
 
 
@@ -167,12 +167,14 @@ def generate(length: int | None = None, boxes: bool = False,
         return _generate_easy(length or 6, boxes)
     n = length or (random.randint(4, 8) if style == "hard" else 6)
     hard = style == "hard"
+    W = min(340, max(150, 30 * n + 34))
     bg = random.choice(CARD_BGS)
-    card = Image.new("RGBA", (WIDTH, HEIGHT), bg + (255,))
+    card = Image.new("RGBA", (W, HEIGHT), bg + (255,))
     if hard:
-        dd = ImageDraw.Draw(card, "RGBA")
-        _paint_design(dd, WIDTH, HEIGHT)
-    layer = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+        des = Image.new("RGBA", (W, HEIGHT), (0, 0, 0, 0))
+        _paint_design(ImageDraw.Draw(des, "RGBA"), W, HEIGHT)
+        card = Image.alpha_composite(card, des)   # real blending (ImageDraw
+    layer = Image.new("RGBA", (W, HEIGHT), (0, 0, 0, 0))   # writes alpha raw)
 
     # per-character: font, size, color, rotation  (the hard-captcha axes)
     adv_total = 0
@@ -184,23 +186,23 @@ def generate(length: int | None = None, boxes: bool = False,
             font=random.choice(FONT_FILES),
             size=size,
             color=random.choice(INK_COLORS),
-            rot=random.uniform(-18, 18),
+            rot=random.uniform(-12, 12),
         ))
     # lay out with small random gaps, then center the run; shrink until it
     # fits with a margin like the real card (never clips at the edges)
     widths = []
     for s in specs:
         widths.append(_font(s["font"], s["size"]).getlength(s["ch"]))
-    gaps = [random.randint(-2, 3) for _ in range(n)]
+    gaps = [random.randint(0, 4) for _ in range(n)]
     for _shrink in range(6):
         run = sum(widths) + sum(gaps)
-        if run <= WIDTH - 14:
+        if run <= W - 14:
             break
         for i, s in enumerate(specs):
             s["size"] = max(18, int(s["size"] * 0.88))
             widths[i] = _font(s["font"], s["size"]).getlength(s["ch"])
     run = sum(widths) + sum(gaps)
-    slack = max(0.0, (WIDTH - 14 - run) / 2)
+    slack = max(0.0, (W - 14 - run) / 2)
     x = 7 + slack / 2 + random.uniform(-min(4, slack / 2), min(4, slack / 2))
 
     char_boxes = []
@@ -224,19 +226,21 @@ def generate(length: int | None = None, boxes: bool = False,
     card = Image.alpha_composite(card, layer)
 
     # --- noise ON TOP, exactly like the shot: thin scribbles + speckle -----
-    d = ImageDraw.Draw(card, "RGBA")
+    over = Image.new("RGBA", (W, HEIGHT), (0, 0, 0, 0))
+    d = ImageDraw.Draw(over, "RGBA")
     for _ in range(random.randint(4, 7) if hard else random.randint(3, 5)):
         c = random.choice(NOISE_COLORS)
-        a = random.randint(80, 150)
-        x0, y0 = random.randint(-10, WIDTH // 2), random.randint(0, HEIGHT)
-        x1, y1 = random.randint(WIDTH // 2, WIDTH + 10), random.randint(0, HEIGHT)
+        a = random.randint(70, 125)
+        x0, y0 = random.randint(-10, W // 2), random.randint(0, HEIGHT)
+        x1, y1 = random.randint(W // 2, W + 10), random.randint(0, HEIGHT)
         d.line([(x0, y0), (x1, y1)], fill=c + (a,), width=1)
     for _ in range(random.randint(40, 90) if hard else random.randint(25, 55)):
         c = random.choice(NOISE_COLORS + INK_COLORS)
         a = random.randint(90, 200)
-        px, py = random.randint(0, WIDTH - 1), random.randint(0, HEIGHT - 1)
+        px, py = random.randint(0, W - 1), random.randint(0, HEIGHT - 1)
         d.point((px, py), fill=c + (a,))
 
+    card = Image.alpha_composite(card, over)
     img = card.convert("RGB")
     LAST_BOXES.clear()
     LAST_BOXES.extend(char_boxes)
@@ -250,8 +254,9 @@ def _generate_easy(n: int, boxes: bool):
     invert = random.random() < 0.5
     bg = (0, 0, 0) if invert else (255, 255, 255)
     ink = (255, 255, 255) if invert else (0, 0, 0)
-    card = Image.new("RGBA", (WIDTH, HEIGHT), bg + (255,))
-    layer = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+    W = min(300, max(150, 30 * n + 30))
+    card = Image.new("RGBA", (W, HEIGHT), bg + (255,))
+    layer = Image.new("RGBA", (W, HEIGHT), (0, 0, 0, 0))
     font_path = random.choice(FONT_FILES)
     specs = []
     for _ in range(n):
@@ -262,13 +267,13 @@ def _generate_easy(n: int, boxes: bool):
     gaps = [random.randint(2, 6) for _ in range(n)]
     for _shrink in range(6):
         run = sum(widths) + sum(gaps)
-        if run <= WIDTH - 14:
+        if run <= W - 14:
             break
         for i, s in enumerate(specs):
             s["size"] = max(20, int(s["size"] * 0.9))
             widths[i] = _font(s["font"], s["size"]).getlength(s["ch"])
     run = sum(widths) + sum(gaps)
-    x = (WIDTH - run) / 2
+    x = (W - run) / 2
     char_boxes = []
     text = ""
     for i, s in enumerate(specs):

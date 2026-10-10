@@ -492,10 +492,160 @@ def train_v5(epochs: int = 12, samples: int = 24000, batch: int = 64,
         print(f"held-out {style}: {cv / Xv.shape[0]:.2%}", flush=True)
 
 
+def train_v6(epochs: int = 30, samples: int = 60000, batch: int = 128,
+             path: str = "glyphnet6.pt", init: str = "glyphnet5.pt") -> None:
+    """SCALE-UP fine-tune: start from the v5 weights, 60k patches, balanced
+    classes, online augmentation, case-weighted loss, cosine LR.  The bars
+    (92/85 exact) need ~99% per-char; 24k patches plateaued at ~70%."""
+    import os
+    cache, cy1, cy2 = "glyph_train_v6.npy", "glyph_train_v6_yid.npy", \
+                      "glyph_train_v6_ycase.npy"
+    if not os.path.exists(cache):
+        X = np.zeros((samples, 2, P, WID), np.uint8)
+        Yid = np.zeros(samples, np.int64)
+        Ycase = np.zeros(samples, np.int64)
+        i = 0
+        print("generating v6 dataset...", flush=True)
+        rng = np.random.default_rng(7)
+        while i < samples:
+            style = ("easy", "hard", "real")[i % 3]
+            img, truth, boxes = generate(style=style, boxes=True)
+            dom = contrast_field(img)
+            for ch, (xc, base, _sz) in zip(truth, boxes):
+                X[i] = np.clip(patch(dom, xc + rng.uniform(-4, 4),
+                                     base + rng.uniform(-6, 6)) * 255,
+                               0, 255).astype(np.uint8)
+                Yid[i] = id36_of(ch)
+                Ycase[i] = case_of(ch)
+                i += 1
+        np.save(cache, X)
+        np.save(cy1, Yid)
+        np.save(cy2, Ycase)
+        del X
+    M = np.load(cache, mmap_mode="r")
+    Yid = torch.from_numpy(np.load(cy1))
+    Ycase = torch.from_numpy(np.load(cy2))
+    n = M.shape[0]
+    print(f"v6 dataset: {n} patches (memmap)", flush=True)
+
+    def get(idx):
+        return torch.from_numpy(np.array(M[idx], dtype=np.float32) / 255.0)
+
+    # class-balanced sampler: rare chars (q j z digits) otherwise starve
+    cnt = np.bincount(Yid.numpy(), minlength=len(ID36)).astype(float) + 1.0
+    w = torch.from_numpy(1.0 / cnt[Yid.numpy()])
+    sampler = torch.utils.data.BatchSampler(
+        torch.utils.data.WeightedRandomSampler(
+            w, num_samples=n, replacement=True), batch, drop_last=False)
+
+    model = GlyphNet(multitask=True)
+    if os.path.exists(init):          # fine-tune, never scratch
+        sd = torch.load(init, map_location="cpu", weights_only=True)
+        model.load_state_dict(sd)
+        print(f"init from {init}", flush=True)
+    opt = torch.optim.Adam(model.parameters(), 8e-4)
+    crit = nn.CrossEntropyLoss()
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs,
+                                                       eta_min=1e-5)
+    floor = 0.0
+    if os.path.exists(path):
+        try:
+            sd = torch.load(path, map_location="cpu", weights_only=True)
+            prev = GlyphNet(multitask=True)
+            prev.load_state_dict(sd)
+            prev.eval()
+            c = 0
+            m0 = min(n, 3000)
+            with torch.no_grad():
+                for i in range(0, m0, 500):
+                    idx = torch.arange(i, min(i + 500, n))
+                    li, lc = prev(get(idx))
+                    pred = [char_of(a, b) for a, b in
+                            zip(li.argmax(-1).tolist(),
+                                lc.argmax(-1).tolist())]
+                    true = [char_of(a, b) for a, b in
+                            zip(Yid[idx].tolist(), Ycase[idx].tolist())]
+                    c += sum(p == t for p, t in zip(pred, true))
+            floor = c / m0
+            print(f"safety floor: {floor:.2%}", flush=True)
+            del prev
+        except Exception:
+            floor = 0.0
+
+    best = 0.0
+    for ep in range(epochs):
+        model.train()
+        tot = 0.0
+        t0 = time.time()
+        for idx in sampler:
+            idx = torch.as_tensor(idx, dtype=torch.long)
+            x = get(idx)
+            # online aug: sub-pixel rolls + gamma on the contrast channel
+            if np.random.rand() < 0.7:
+                dx, dy = np.random.randint(-1, 2, 2)
+                x = torch.roll(x, shifts=(int(dy), int(dx)), dims=(2, 3))
+            if np.random.rand() < 0.4:
+                gm = np.random.choice((0.8, 1.25))
+                x = x.clone()
+                x[:, 0] = x[:, 0].clamp(0, 1) ** gm
+            x = x + 0.02 * torch.rand_like(x) - 0.01
+            li, lc = model(x)
+            loss = crit(li, Yid[idx]) + 1.5 * crit(lc, Ycase[idx])
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            tot += loss.item() * len(idx)
+        sched.step()
+        model.eval()
+        correct = 0
+        with torch.no_grad():
+            for i in range(0, n, 1000):
+                idx = torch.arange(i, min(i + 1000, n))
+                li, lc = model(get(idx))
+                pred = [char_of(a, b) for a, b in
+                        zip(li.argmax(-1).tolist(), lc.argmax(-1).tolist())]
+                true = [char_of(a, b) for a, b in zip(Yid[idx].tolist(),
+                                                      Ycase[idx].tolist())]
+                correct += sum(p == t for p, t in zip(pred, true))
+        acc = correct / n
+        print(f"epoch {ep+1}/{epochs} loss {tot/n:.4f} char-acc {acc:.2%} "
+              f"lr {sched.get_last_lr()[0]:.2e} ({time.time()-t0:.0f}s)",
+              flush=True)
+        if acc > best:
+            best = acc
+            if acc > floor:
+                torch.save(model.state_dict(), path)
+                print(f"  saved ({acc:.2%} > floor {floor:.2%})", flush=True)
+
+    model.eval()
+    for style in ("easy", "hard", "real"):
+        Xv, Yv = [], []
+        rng = np.random.default_rng(123)
+        for _ in range(120):
+            img, truth, boxes = generate(style=style, boxes=True)
+            dom = contrast_field(img)
+            for ch, (xc, base, _sz) in zip(truth, boxes):
+                Xv.append(patch(dom, xc + rng.uniform(-4, 4),
+                                base + rng.uniform(-6, 6)))
+                Yv.append(ch)
+        Xv = torch.from_numpy(np.stack(Xv)).float()
+        cv = 0
+        with torch.no_grad():
+            for i in range(0, Xv.shape[0], 500):
+                li, lc = model(Xv[i:i + 500])
+                pred = [char_of(a, b) for a, b in
+                        zip(li.argmax(-1).tolist(), lc.argmax(-1).tolist())]
+                cv += sum(p == t for p, t in zip(pred, Yv[i:i + 500]))
+        print(f"held-out {style}: {cv / Xv.shape[0]:.2%}", flush=True)
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "train5":
         train_v5(int(sys.argv[2]) if len(sys.argv) > 2 else 12,
                  int(sys.argv[3]) if len(sys.argv) > 3 else 24000)
+    if len(sys.argv) > 1 and sys.argv[1] == "train6":
+        train_v6(int(sys.argv[2]) if len(sys.argv) > 2 else 30,
+                 int(sys.argv[3]) if len(sys.argv) > 3 else 60000)
     if len(sys.argv) > 1 and sys.argv[1] == "train":
         train(int(sys.argv[2]) if len(sys.argv) > 2 else 8,
               int(sys.argv[3]) if len(sys.argv) > 3 else 15000)

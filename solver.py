@@ -416,23 +416,29 @@ def read_glyphnet_debug(img: Image.Image, expected_len: int | None = None):
     for c in kept:
         ys, xs = np.where(c["m"])
         xcs.append(c["x"] + float(xs.mean()))
-    res = (glyphnet.classify_many_tta(dom, xcs, baseline)
+    res = (glyphnet.classify_many_tta(dom, xcs, baseline, top2=True)
            if getattr(glyphnet.get_model(), "tta", True)
-           else glyphnet.classify_many(dom, xcs, baseline))
+           else [(ch, cf, ch) for ch, cf in
+                 glyphnet.classify_many(dom, xcs, baseline)])
     # ENSEMBLE: a second weights file (glyphnet8.pt) votes per glyph; the
     # higher-confidence read wins disagreements (independent inits/errors)
     m2 = glyphnet.get_model("glyphnet8.pt", quiet=True)
     if m2 is not None and res and res[0][0]:
-        res2 = glyphnet.classify_many_tta(dom, xcs, baseline, model=m2)
+        res2 = glyphnet.classify_many_tta(dom, xcs, baseline, model=m2,
+                                          top2=True)
         merged = []
-        for (c1, f1), (c2, f2) in zip(res, res2):
+        for r1, r2 in zip(res, res2):
+            c1, f1 = r1[0], r1[1]
+            c2, f2 = r2[0], r2[1]
             if c1 == c2:
-                merged.append((c1, (f1 + f2) / 2))
+                merged.append((c1, (f1 + f2) / 2, r1[2]))
             else:
-                merged.append((c1, f1 * 1.0) if f1 >= f2 else (c2, f2))
+                merged.append((c1, f1, r1[2]) if f1 >= f2
+                              else (c2, f2, r2[2]))
         res = merged
-    out = [ch for ch, _ in res]
-    confs = [cf for _, cf in res]
+    out = [r[0] for r in res]
+    confs = [r[1] for r in res]
+    runners = [r[2] for r in res]
     # CASE POST-PASS (all models): vertical geometry is exact information —
     # cap line vs x-height line separate 'C' from 'c' with ~10 px of margin.
     # The CNN case head gets a vote, but a glyph sitting ON the x-height line
@@ -506,6 +512,15 @@ def read_glyphnet_debug(img: Image.Image, expected_len: int | None = None):
     for i, c in enumerate(kept):
         if out[i] in ("O", "0") and c["h"] > 10 and not mono:
             out[i] = "0" if c["w"] / c["h"] < 0.85 else "O"
+    # TEMPLATE VERIFIER: on low-margin CNN reads, settle top-1 vs top-2 with
+    # exact font templates (same font files the captchas are drawn with).
+    import templates
+    for i, c in enumerate(kept):
+        if confs[i] < 0.55 and runners[i] != out[i]:
+            sc = templates.score_candidates(upright(c["m"]),
+                                            (out[i], runners[i]))
+            if sc[0] != sc[1] and abs(sc[0] - sc[1]) >= 0.05:
+                out[i] = out[i] if sc[0] > sc[1] else runners[i]
     mean_conf = sum(confs) / len(confs) if confs else 0.0
     return "".join(out), mean_conf, kept, dropped, dom
 

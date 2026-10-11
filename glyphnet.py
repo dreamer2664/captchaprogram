@@ -236,10 +236,11 @@ def classify_many(dom: np.ndarray, xcs, base: float):
 
 def classify_many_tta(dom: np.ndarray, xcs, base: float, model=None,
                       jitters=((0.0, 0.0), (-1.5, 0.0), (1.5, 0.0),
-                               (0.0, -1.0), (0.0, 1.0))):
+                               (0.0, -1.0), (0.0, 1.0)), top2=False):
     """TTA: average the softmax evidence over sub-pixel x-jitters.
     Rotated/AA glyphs sit near patch-grid boundaries; one forward per jitter
-    costs ~1 ms each and removes a whole class of flip-flop errors."""
+    costs ~1 ms each and removes a whole class of flip-flop errors.
+    top2=True also returns the runner-up char per glyph (verifier use)."""
     m = model if model is not None else get_model()
     if m is None or len(xcs) == 0:
         return [("", 0.0)] * len(xcs)
@@ -265,11 +266,20 @@ def classify_many_tta(dom: np.ndarray, xcs, base: float, model=None,
         conf = pi.gather(1, ii[:, None])[:, 0] * pc.gather(1, cc[:, None])[:, 0]
         res = [(char_of(int(a), int(b)), float(c))
                for a, b, c in zip(ii, cc, conf)]
+        if top2:
+            case = int(cc[0]) if len(cc) else 0
+            order = pi.argsort(1, descending=True)[:, :2]
+            res = [(r[0], r[1],
+                    char_of(int(order[i, 1]), case)) for i, r in enumerate(res)]
     else:
         p = sum(o[0] for o in outs) / len(outs)
         idx = p.argmax(1)
         conf = p.gather(1, idx[:, None])[:, 0]
         res = [(ALPHABET[int(i)], float(c)) for i, c in zip(idx, conf)]
+        if top2:
+            order = p.argsort(1, descending=True)[:, :2]
+            res = [(r[0], r[1], ALPHABET[int(order[i, 1])])
+                   for i, r in enumerate(res)]
     return res
 
 

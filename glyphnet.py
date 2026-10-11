@@ -930,6 +930,11 @@ def train_v10(epochs: int = 30, patches_per_epoch: int = 24000, batch: int = 128
             xn = np.stack(xs_l)
             for k in range(len(xn)):
                 xn[k] = _aug_patch_np(xn[k], rng)
+                if rng.random() < 0.7:
+                    dx, dy = int(rng.integers(-1, 2)), int(rng.integers(-1, 2))
+                    xn[k] = np.roll(xn[k], (dy, dx), (1, 2))
+                if rng.random() < 0.4:
+                    xn[k, 0] = np.clip(xn[k, 0], 0, 1) ** rng.choice((0.8, 1.25))
             x = torch.from_numpy(xn) + 0.02 * torch.rand(len(xn), 2, P, WID) - 0.01
             yt = torch.tensor(yid, dtype=torch.long)
             yc = torch.tensor(ycase, dtype=torch.long)

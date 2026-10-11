@@ -856,6 +856,124 @@ def train_v8(epochs: int = 40, patches_per_epoch: int = 24000, batch: int = 128,
         print(f"held-out {style}: {cv / Xv.shape[0]:.2%}", flush=True)
 
 
+def _est_anchor(dom, comps, xc_true, base_true):
+    """the anchor the INFERENCE pipeline will actually use for this glyph:
+    ink centroid of its component + the shared baseline estimate.  Training
+    on truth anchors left a systematic train/infer gap (suite per-char ran
+    ~4 pts below held-out)."""
+    if not comps:
+        return xc_true, base_true
+    best, bd = None, 9.0
+    for c in comps:
+        ys, xs = np.where(c["m"])
+        if len(xs) == 0:
+            continue
+        ccx = c["x"] + float(xs.mean())
+        d = abs(ccx - xc_true)
+        if d < bd:
+            best, bd = (ccx, c), d
+    if best is None:
+        return xc_true, base_true
+    import solver
+    return best[0], solver._baseline(comps)
+
+
+def train_v10(epochs: int = 30, patches_per_epoch: int = 24000, batch: int = 128,
+              path: str = "glyphnet10.pt", init: str = "glyphnet9.pt") -> None:
+    """v10 = v9 recipe but patches anchored EXACTLY where inference anchors
+    them (component ink centroid + estimated baseline), so the network never
+    sees a patch shape the runner will not produce."""
+    import os
+    import solver
+    model = GlyphNet(multitask=True, wide=True)
+    for cand in (init, "glyphnet8.pt", "glyphnet7.pt"):
+        if os.path.exists(cand):
+            sd = torch.load(cand, map_location="cpu", weights_only=True)
+            sd.pop("ch1_whole", None)
+            own = model.state_dict()
+            sd = {k: v for k, v in sd.items()
+                  if k in own and own[k].shape == v.shape}
+            model.load_state_dict(sd, strict=False)
+            print(f"init from {cand}: {len(sd)} keys carried", flush=True)
+            break
+    opt = torch.optim.Adam(model.parameters(), 3e-4)
+    crit = nn.CrossEntropyLoss()
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs,
+                                                       eta_min=1e-5)
+    steps = max(1, patches_per_epoch // batch)
+    best = 0.0
+    seed = 777001
+    rng = np.random.default_rng(11)
+    for ep in range(epochs):
+        model.train()
+        tot = 0.0
+        seen = 0
+        t0 = time.time()
+        for _s in range(steps):
+            seed += 1
+            random.seed(seed)
+            xs_l, yid, ycase = [], [], []
+            while len(xs_l) < batch:
+                style = ("easy", "hard", "real")[len(xs_l) % 3]
+                img, truth, boxes = generate(style=style, boxes=True)
+                dom, comps = solver.analyze(solver.norm_scale(img))
+                for ch, (xc, base, _sz) in zip(truth, boxes):
+                    if len(xs_l) >= batch:
+                        break
+                    ex, eb = _est_anchor(dom, comps, xc, base)
+                    if abs(ex - xc) > 6:      # merged/split: skip label noise
+                        continue
+                    xs_l.append(patch(dom, ex + rng.uniform(-1.5, 1.5),
+                                      eb + rng.uniform(-2, 2), True))
+                    yid.append(id36_of(ch))
+                    ycase.append(case_of(ch))
+            xn = np.stack(xs_l)
+            for k in range(len(xn)):
+                xn[k] = _aug_patch_np(xn[k], rng)
+            x = torch.from_numpy(xn) + 0.02 * torch.rand(len(xn), 2, P, WID) - 0.01
+            yt = torch.tensor(yid, dtype=torch.long)
+            yc = torch.tensor(ycase, dtype=torch.long)
+            li, lc = model(x)
+            loss = crit(li, yt) + 2.0 * crit(lc, yc)
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            tot += loss.item() * len(yt)
+            seen += len(yt)
+        sched.step()
+        acc = _quick_acc(model, 4000, seed=999, whole=True)
+        print(f"epoch {ep+1}/{epochs} loss {tot/seen:.4f} char-acc {acc:.2%} "
+              f"lr {sched.get_last_lr()[0]:.2e} ({time.time()-t0:.0f}s)",
+              flush=True)
+        if acc > best:
+            best = acc
+            sd = dict(model.state_dict())
+            sd["ch1_whole"] = torch.tensor(1)
+            torch.save(sd, path)
+            print(f"  saved ({acc:.2%})", flush=True)
+    model.eval()
+    for style in ("easy", "hard", "real"):
+        Xv, Yv = [], []
+        jr = np.random.default_rng(123)
+        for _ in range(120):
+            img, truth, boxes = generate(style=style, boxes=True)
+            dom, comps = solver.analyze(solver.norm_scale(img))
+            for ch, (xc, base, _sz) in zip(truth, boxes):
+                ex, eb = _est_anchor(dom, comps, xc, base)
+                Xv.append(patch(dom, ex + jr.uniform(-1.5, 1.5),
+                                eb + jr.uniform(-2, 2), True))
+                Yv.append(ch)
+        Xv = torch.from_numpy(np.stack(Xv)).float()
+        cv = 0
+        with torch.no_grad():
+            for i in range(0, Xv.shape[0], 500):
+                li, lc = model(Xv[i:i + 500])
+                pred = [char_of(a, b) for a, b in
+                        zip(li.argmax(-1).tolist(), lc.argmax(-1).tolist())]
+                cv += sum(p == t for p, t in zip(pred, Yv[i:i + 500]))
+        print(f"held-out {style}: {cv / Xv.shape[0]:.2%}", flush=True)
+
+
 def _aug_patch_np(p: np.ndarray, rng: np.random.Generator) -> np.ndarray:
     """rich per-patch augmentation on the numpy patch (both channels)."""
     if rng.random() < 0.5:
@@ -1007,6 +1125,9 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "train5":
         train_v5(int(sys.argv[2]) if len(sys.argv) > 2 else 12,
                  int(sys.argv[3]) if len(sys.argv) > 3 else 24000)
+    if len(sys.argv) > 1 and sys.argv[1] == "train10":
+        train_v10(int(sys.argv[2]) if len(sys.argv) > 2 else 30,
+                  int(sys.argv[3]) if len(sys.argv) > 3 else 24000)
     if len(sys.argv) > 1 and sys.argv[1] == "train9":
         train_v9(int(sys.argv[2]) if len(sys.argv) > 2 else 50,
                  int(sys.argv[3]) if len(sys.argv) > 3 else 24000)

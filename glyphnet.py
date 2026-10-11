@@ -33,17 +33,28 @@ WID = 84          # wide patch: neighbours visible => relative case cues
 UP, DOWN, SIDE = 40, 16, 42
 
 
-def _shape_channel(mask_win: np.ndarray) -> np.ndarray:
-    """WHOLE window mask, square-normalized to 28, centred.  (Keeping only
-    the largest component deleted i/j tittles and made l and i IDENTICAL in
-    this channel — the single biggest confusion pair in mining.)"""
-    ys, xs = np.where(mask_win > 0)
+def _shape_channel(mask_win: np.ndarray, whole: bool = False) -> np.ndarray:
+    """square-normalized to 28, centred.  whole=True keeps the ENTIRE window
+    mask (tittles visible: l vs i separable); whole=False keeps only the
+    largest component (what v5-v8 weights were trained with — the channel
+    version MUST match the weights or accuracy collapses)."""
     canv = np.zeros((P, WID), np.float32)
-    if len(xs) == 0:
-        return canv
-    x, y = int(xs.min()), int(ys.min())
-    w, h = int(xs.max()) - x + 1, int(ys.max()) - y + 1
-    m = mask_win[y:y + h, x:x + w].astype(np.uint8) * 255
+    if whole:
+        ys, xs = np.where(mask_win > 0)
+        if len(xs) == 0:
+            return canv
+        x, y = int(xs.min()), int(ys.min())
+        w, h = int(xs.max()) - x + 1, int(ys.max()) - y + 1
+        m = mask_win[y:y + h, x:x + w].astype(np.uint8) * 255
+    else:
+        n, lab, stats, _ = cv2.connectedComponentsWithStats(
+            mask_win.astype(np.uint8), 8)
+        if n <= 1:
+            return canv
+        i = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+        x, y, w, h = (stats[i, cv2.CC_STAT_LEFT], stats[i, cv2.CC_STAT_TOP],
+                      stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT])
+        m = (lab[y:y + h, x:x + w] == i).astype(np.uint8) * 255
     s = max(h, w)
     sq = np.zeros((s, s), np.uint8)
     sq[(s - h) // 2:(s - h) // 2 + h, (s - w) // 2:(s - w) // 2 + w] = m
@@ -52,7 +63,8 @@ def _shape_channel(mask_win: np.ndarray) -> np.ndarray:
     return canv
 
 
-def patch(dom: np.ndarray, xc: float, base: float) -> np.ndarray:
+def patch(dom: np.ndarray, xc: float, base: float,
+          whole: bool = False) -> np.ndarray:
     """2-channel 56x56 patch around (xc, baseline)."""
     H, W = dom.shape
     x0, y0 = int(round(xc)) - SIDE, int(round(base)) - UP
@@ -66,7 +78,7 @@ def patch(dom: np.ndarray, xc: float, base: float) -> np.ndarray:
     wxs1, wys1 = min(W, wx0 + 32), min(H, wy0 + 54)
     win[wys0 - wy0:wys1 - wy0, wxs0 - wx0:wxs1 - wx0] = dom[wys0:wys1, wxs0:wxs1]
     m = (win > 0.78).astype(np.uint8)  # lines cap at dom 0.75: never pass
-    ch1 = _shape_channel(m)
+    ch1 = _shape_channel(m, whole)
     return np.stack([ch0, ch1])
 
 
@@ -160,11 +172,13 @@ def get_model(path: str = "glyphnet.pt", quiet: bool = False):
             sd = {("head." + k.split(".", 2)[2] if k.startswith("net.16.")
                    else "trunk." + k.split(".", 1)[1]): v
                   for k, v in sd.items()}
+        ch1w = bool(sd.pop("ch1_whole", False))
         wide = any(k == "trunk.13.weight" and v.shape[0] == 384
                    for k, v in sd.items())
         m = GlyphNet(multitask=any(k.startswith("head_id") for k in sd),
                      wide=wide)
         m.load_state_dict(sd)
+        m.ch1_whole = ch1w
         m.eval()
         if path == "glyphnet.pt":
             _model = m
@@ -184,7 +198,8 @@ def classify(dom: np.ndarray, xc: float, base: float):
     m = get_model()
     if m is None:
         return "", 0.0
-    x = torch.from_numpy(patch(dom, xc, base)[None]).float()
+    x = torch.from_numpy(
+        patch(dom, xc, base, getattr(m, "ch1_whole", False))[None]).float()
     with torch.no_grad():
         out = m(x)
         if getattr(m, "multitask", False):
@@ -201,7 +216,9 @@ def classify_many(dom: np.ndarray, xcs, base: float):
     m = get_model()
     if m is None or len(xcs) == 0:
         return [("", 0.0)] * len(xcs)
-    x = torch.from_numpy(np.stack([patch(dom, xc, base) for xc in xcs])).float()
+    x = torch.from_numpy(np.stack(
+        [patch(dom, xc, base, getattr(m, "ch1_whole", False))
+         for xc in xcs])).float()
     with torch.no_grad():
         out = m(x)
         if getattr(m, "multitask", False):
@@ -230,7 +247,9 @@ def classify_many_tta(dom: np.ndarray, xcs, base: float, model=None,
     with torch.no_grad():
         for jx, jy in jitters:
             x = torch.from_numpy(
-                np.stack([patch(dom, xc + jx, base + jy) for xc in xcs])
+                np.stack([patch(dom, xc + jx, base + jy,
+                                getattr(m, "ch1_whole", False))
+                          for xc in xcs])
             ).float()
             o = m(x)
             if getattr(m, "multitask", False):
@@ -891,7 +910,7 @@ def train_v9(epochs: int = 50, patches_per_epoch: int = 24000, batch: int = 128,
         t0 = time.time()
         for _s in range(steps):
             seed += 1
-            x, yid, ycase = _fresh_batch(batch, seed)
+            x, yid, ycase = _fresh_batch(batch, seed, whole=True)
             xn = x.numpy()
             for k in range(len(xn)):
                 xn[k] = _aug_patch_np(xn[k], rng)
@@ -910,13 +929,15 @@ def train_v9(epochs: int = 50, patches_per_epoch: int = 24000, batch: int = 128,
             tot += loss.item() * len(yid)
             seen += len(yid)
         sched.step()
-        acc = _quick_acc(model, 4000, seed=999)
+        acc = _quick_acc(model, 4000, seed=999, whole=True)
         print(f"epoch {ep+1}/{epochs} loss {tot/seen:.4f} char-acc {acc:.2%} "
               f"lr {sched.get_last_lr()[0]:.2e} ({time.time()-t0:.0f}s)",
               flush=True)
         if acc > best:
             best = acc
-            torch.save(model.state_dict(), path)
+            sd = dict(model.state_dict())
+            sd["ch1_whole"] = torch.tensor(1)
+            torch.save(sd, path)
             print(f"  saved ({acc:.2%})", flush=True)
     model.eval()
     for style in ("easy", "hard", "real"):
@@ -927,7 +948,7 @@ def train_v9(epochs: int = 50, patches_per_epoch: int = 24000, batch: int = 128,
             dom = contrast_field(img)
             for ch, (xc, base, _sz) in zip(truth, boxes):
                 Xv.append(patch(dom, xc + jr.uniform(-4, 4),
-                                base + jr.uniform(-6, 6)))
+                                base + jr.uniform(-6, 6), True))
                 Yv.append(ch)
         Xv = torch.from_numpy(np.stack(Xv)).float()
         cv = 0
@@ -940,7 +961,7 @@ def train_v9(epochs: int = 50, patches_per_epoch: int = 24000, batch: int = 128,
         print(f"held-out {style}: {cv / Xv.shape[0]:.2%}", flush=True)
 
 
-def _fresh_batch(batch: int, seed: int):
+def _fresh_batch(batch: int, seed: int, whole: bool = False):
     """-> (x float32 [B,2,P,WID], yid, ycase) generated live, mixed styles."""
     random.seed(seed)
     xs, yid, ycase = [], [], []
@@ -953,7 +974,7 @@ def _fresh_batch(batch: int, seed: int):
             if len(xs) >= batch:
                 break
             xs.append(patch(dom, xc + rng.uniform(-4, 4),
-                            base + rng.uniform(-6, 6)))
+                            base + rng.uniform(-6, 6), whole))
             yid.append(id36_of(ch))
             ycase.append(case_of(ch))
     return (torch.from_numpy(np.stack(xs)).float(),
@@ -961,13 +982,13 @@ def _fresh_batch(batch: int, seed: int):
             torch.tensor(ycase, dtype=torch.long))
 
 
-def _quick_acc(model, m, seed=7):
+def _quick_acc(model, m, seed=7, whole=False):
     model.eval()
     c = 0
     done = 0
     with torch.no_grad():
         while done < m:
-            x, yid, ycase = _fresh_batch(min(500, m - done), seed)
+            x, yid, ycase = _fresh_batch(min(500, m - done), seed, whole)
             seed += 1
             li, lc = model(x)
             pred = [char_of(a, b) for a, b in

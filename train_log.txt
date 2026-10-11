@@ -1,0 +1,4 @@
+epoch 1/15  loss 6.379  val exact 0.0%  (138s)
+epoch 2/15  loss 4.427  val exact 0.0%  (144s)
+epoch 3/15  loss 4.426  val exact 0.0%  (145s)
+epoch 4/15  loss 4.426  val exact 0.0%  (146s)

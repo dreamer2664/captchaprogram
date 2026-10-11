@@ -34,15 +34,16 @@ UP, DOWN, SIDE = 40, 16, 42
 
 
 def _shape_channel(mask_win: np.ndarray) -> np.ndarray:
-    """largest component of window, square-normalized to 28, centred"""
-    n, lab, stats, _ = cv2.connectedComponentsWithStats(mask_win.astype(np.uint8), 8)
+    """WHOLE window mask, square-normalized to 28, centred.  (Keeping only
+    the largest component deleted i/j tittles and made l and i IDENTICAL in
+    this channel — the single biggest confusion pair in mining.)"""
+    ys, xs = np.where(mask_win > 0)
     canv = np.zeros((P, WID), np.float32)
-    if n <= 1:
+    if len(xs) == 0:
         return canv
-    i = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
-    x, y, w, h = (stats[i, cv2.CC_STAT_LEFT], stats[i, cv2.CC_STAT_TOP],
-                  stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT])
-    m = (lab[y:y + h, x:x + w] == i).astype(np.uint8) * 255
+    x, y = int(xs.min()), int(ys.min())
+    w, h = int(xs.max()) - x + 1, int(ys.max()) - y + 1
+    m = mask_win[y:y + h, x:x + w].astype(np.uint8) * 255
     s = max(h, w)
     sq = np.zeros((s, s), np.uint8)
     sq[(s - h) // 2:(s - h) // 2 + h, (s - w) // 2:(s - w) // 2 + w] = m
@@ -836,6 +837,109 @@ def train_v8(epochs: int = 40, patches_per_epoch: int = 24000, batch: int = 128,
         print(f"held-out {style}: {cv / Xv.shape[0]:.2%}", flush=True)
 
 
+def _aug_patch_np(p: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    """rich per-patch augmentation on the numpy patch (both channels)."""
+    if rng.random() < 0.5:
+        ang = float(rng.uniform(-6, 6))
+        M = cv2.getRotationMatrix2D((WID / 2, P / 2), ang, 1.0)
+        p = cv2.warpAffine(p, M, (WID, P), flags=cv2.INTER_LINEAR,
+                           borderMode="constant", borderValue=0)
+    if rng.random() < 0.2:
+        p = cv2.GaussianBlur(p, (3, 3), 0)
+    if rng.random() < 0.3:
+        f = float(rng.uniform(0.85, 1.15))
+        nw = max(8, int(WID * f))
+        r = cv2.resize(p, (nw, P), interpolation=cv2.INTER_LINEAR)
+        out = np.zeros((2, P, WID), np.float32)
+        x0 = (WID - nw) // 2
+        if nw >= WID:
+            out[:] = r[:, x0:x0 + WID]
+        else:
+            out[:, x0:x0 + nw] = r
+        p = out
+    return p
+
+
+def train_v9(epochs: int = 50, patches_per_epoch: int = 24000, batch: int = 128,
+             path: str = "glyphnet9.pt", init: str = "glyphnet8.pt") -> None:
+    """v9: rich aug (rotation/blur/width-jitter per patch) + case loss x2,
+    wide trunk, from v8.  Mining showed case = 3.4% and l/i-family identity
+    errors dominating; the ch1 whole-mask fix + these augs target both."""
+    import os
+    model = GlyphNet(multitask=True, wide=True)
+    for cand in (init, "glyphnet7.pt", "glyphnet5.pt"):
+        if os.path.exists(cand):
+            sd = torch.load(cand, map_location="cpu", weights_only=True)
+            own = model.state_dict()
+            sd = {k: v for k, v in sd.items()
+                  if k in own and own[k].shape == v.shape}
+            model.load_state_dict(sd, strict=False)
+            print(f"init from {cand}: {len(sd)} keys carried", flush=True)
+            break
+    opt = torch.optim.Adam(model.parameters(), 5e-4)
+    crit = nn.CrossEntropyLoss()
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs,
+                                                       eta_min=1e-5)
+    steps = max(1, patches_per_epoch // batch)
+    best = 0.0
+    seed = 555001
+    rng = np.random.default_rng(3)
+    for ep in range(epochs):
+        model.train()
+        tot = 0.0
+        seen = 0
+        t0 = time.time()
+        for _s in range(steps):
+            seed += 1
+            x, yid, ycase = _fresh_batch(batch, seed)
+            xn = x.numpy()
+            for k in range(len(xn)):
+                xn[k] = _aug_patch_np(xn[k], rng)
+                if rng.random() < 0.7:
+                    dx, dy = int(rng.integers(-1, 2)), int(rng.integers(-1, 2))
+                    xn[k] = np.roll(xn[k], (dy, dx), (1, 2))
+                if rng.random() < 0.4:
+                    xn[k, 0] = np.clip(xn[k, 0], 0, 1) ** rng.choice(
+                        (0.8, 1.25))
+            x = torch.from_numpy(xn) + 0.02 * torch.rand(batch, 2, P, WID) - 0.01
+            li, lc = model(x)
+            loss = crit(li, yid) + 2.0 * crit(lc, ycase)
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            tot += loss.item() * len(yid)
+            seen += len(yid)
+        sched.step()
+        acc = _quick_acc(model, 4000, seed=999)
+        print(f"epoch {ep+1}/{epochs} loss {tot/seen:.4f} char-acc {acc:.2%} "
+              f"lr {sched.get_last_lr()[0]:.2e} ({time.time()-t0:.0f}s)",
+              flush=True)
+        if acc > best:
+            best = acc
+            torch.save(model.state_dict(), path)
+            print(f"  saved ({acc:.2%})", flush=True)
+    model.eval()
+    for style in ("easy", "hard", "real"):
+        Xv, Yv = [], []
+        jr = np.random.default_rng(123)
+        for _ in range(120):
+            img, truth, boxes = generate(style=style, boxes=True)
+            dom = contrast_field(img)
+            for ch, (xc, base, _sz) in zip(truth, boxes):
+                Xv.append(patch(dom, xc + jr.uniform(-4, 4),
+                                base + jr.uniform(-6, 6)))
+                Yv.append(ch)
+        Xv = torch.from_numpy(np.stack(Xv)).float()
+        cv = 0
+        with torch.no_grad():
+            for i in range(0, Xv.shape[0], 500):
+                li, lc = model(Xv[i:i + 500])
+                pred = [char_of(a, b) for a, b in
+                        zip(li.argmax(-1).tolist(), lc.argmax(-1).tolist())]
+                cv += sum(p == t for p, t in zip(pred, Yv[i:i + 500]))
+        print(f"held-out {style}: {cv / Xv.shape[0]:.2%}", flush=True)
+
+
 def _fresh_batch(batch: int, seed: int):
     """-> (x float32 [B,2,P,WID], yid, ycase) generated live, mixed styles."""
     random.seed(seed)
@@ -878,6 +982,9 @@ def _quick_acc(model, m, seed=7):
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "train5":
         train_v5(int(sys.argv[2]) if len(sys.argv) > 2 else 12,
+                 int(sys.argv[3]) if len(sys.argv) > 3 else 24000)
+    if len(sys.argv) > 1 and sys.argv[1] == "train9":
+        train_v9(int(sys.argv[2]) if len(sys.argv) > 2 else 50,
                  int(sys.argv[3]) if len(sys.argv) > 3 else 24000)
     if len(sys.argv) > 1 and sys.argv[1] == "train8":
         train_v8(int(sys.argv[2]) if len(sys.argv) > 2 else 40,

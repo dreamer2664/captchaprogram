@@ -265,7 +265,7 @@ def _generate_easy(n: int, boxes: bool):
                           size=card_size, color=ink,
                           rot=random.uniform(-10, 10)))
     widths = [_font(s["font"], s["size"]).getlength(s["ch"]) for s in specs]
-    gaps = [random.randint(2, 6) for _ in range(n)]
+    gaps = [random.randint(3, 7) for _ in range(n)]
     for _shrink in range(6):
         run = sum(widths) + sum(gaps)
         if run <= W - 14:

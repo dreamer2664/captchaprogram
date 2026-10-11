@@ -861,20 +861,23 @@ def _aug_patch_np(p: np.ndarray, rng: np.random.Generator) -> np.ndarray:
     if rng.random() < 0.5:
         ang = float(rng.uniform(-6, 6))
         M = cv2.getRotationMatrix2D((WID / 2, P / 2), ang, 1.0)
-        p = cv2.warpAffine(p, M, (WID, P), flags=cv2.INTER_LINEAR,
-                           borderMode="constant", borderValue=0)
+        p = np.stack([cv2.warpAffine(c, M, (WID, P), flags=cv2.INTER_LINEAR,
+                                     borderMode=cv2.BORDER_CONSTANT,
+                                     borderValue=0) for c in p])
     if rng.random() < 0.2:
-        p = cv2.GaussianBlur(p, (3, 3), 0)
+        p = np.stack([cv2.GaussianBlur(c, (3, 3), 0) for c in p])
     if rng.random() < 0.3:
         f = float(rng.uniform(0.85, 1.15))
         nw = max(8, int(WID * f))
-        r = cv2.resize(p, (nw, P), interpolation=cv2.INTER_LINEAR)
         out = np.zeros((2, P, WID), np.float32)
-        x0 = (WID - nw) // 2
-        if nw >= WID:
-            out[:] = r[:, x0:x0 + WID]
-        else:
-            out[:, x0:x0 + nw] = r
+        for ci in range(2):
+            r = cv2.resize(p[ci], (nw, P), interpolation=cv2.INTER_LINEAR)
+            if nw >= WID:
+                x0 = (nw - WID) // 2
+                out[ci] = r[:, x0:x0 + WID]
+            else:
+                x0 = (WID - nw) // 2
+                out[ci, :, x0:x0 + nw] = r
         p = out
     return p
 

@@ -371,6 +371,12 @@ def read_template(img: Image.Image, expected_len: int | None = None) -> str:
 
 
 AMBIG_CASE = set("acemnorsuvwxz")   # x-height shapes: case = pure scale
+# mixed-size cards have no cap/x-height LINES, but glyph aspect (w/h) still
+# separates case for these shapes (measured over all 6 captive fonts):
+# char -> (aspect midpoint, +1 if lowercase is wider, -1 if narrower)
+ASPECT_CASE = {"m": (1.30, 1), "e": (0.835, 1), "r": (0.815, -1),
+               "w": (1.35, 1), "x": (0.975, 1), "u": (0.935, 1),
+               "v": (1.00, 1), "n": (0.95, 1)}
 XHEIGHT_REF = set("acemnr")          # unambiguous x-height-only shapes
 
 
@@ -455,6 +461,17 @@ def read_glyphnet_debug(img: Image.Image, expected_len: int | None = None):
                 if ch.lower() in AMBIG_CASE and abs(heights[i] - cap) != abs(heights[i] - xh):
                     want_upper = abs(heights[i] - cap) < abs(heights[i] - xh)
                     out[i] = ch.upper() if want_upper else ch.lower()
+    # ASPECT CASE PRIOR for mixed-size cards (bimodal lines unavailable)
+    if cap is None:
+        for i, c in enumerate(kept):
+            low = out[i].lower()
+            if low in ASPECT_CASE and confs[i] < 0.60 and c["h"] > 10:
+                mid, sgn = ASPECT_CASE[low]
+                a = c["w"] / c["h"]
+                if abs(a - mid) >= 0.05:
+                    want_lower = (a > mid) if sgn == 1 else (a < mid)
+                    out[i] = low if want_lower else low.upper()
+
     # GEOMETRY PASS 2: dot-gap and descender cues are exact information the
     # CNN head keeps getting wrong (l/i 47 flips, J/j 43, Z/z 38 in mining).
     #   i,j  : tittle = a row-gap inside the bbox;  l : stem continuous
